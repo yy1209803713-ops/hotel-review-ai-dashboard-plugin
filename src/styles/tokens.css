@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light;
+  --app-bg: #f5f7fb;
+  --panel: #ffffff;
+  --panel-soft: #fafbff;
+  --line: #e5e7eb;
+  --line-soft: #f1f5f9;
+  --text: #111827;
+  --muted: #64748b;
+  --blue: #2563eb;
+  --blue-soft: #eff6ff;
+  --green: #16a34a;
+  --green-soft: #f0fdf4;
+  --red: #dc2626;
+  --red-soft: #fff1f2;
+  --orange: #f97316;
+  --amber: #d97706;
+  --shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+}
+
+[theme-mode='dark'],
+.full-screen {
+  color-scheme: dark;
+  --app-bg: transparent;
+  --panel: rgba(17, 24, 39, 0.88);
+  --panel-soft: rgba(30, 41, 59, 0.78);
+  --line: rgba(148, 163, 184, 0.28);
+  --line-soft: rgba(148, 163, 184, 0.16);
+  --text: #f8fafc;
+  --muted: #cbd5e1;
+  --blue-soft: rgba(37, 99, 235, 0.22);
+  --green-soft: rgba(22, 163, 74, 0.18);
+  --red-soft: rgba(220, 38, 38, 0.18);
+  --shadow: none;
+}

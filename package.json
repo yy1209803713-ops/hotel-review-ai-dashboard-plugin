@@ -1,0 +1,40 @@
+{
+  "name": "hotel-review-ai-dashboard-plugin-v1-2",
+  "version": "1.2.0",
+  "type": "module",
+  "private": true,
+  "output": "dist",
+  "scripts": {
+    "dev": "vite",
+    "start": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@douyinfe/semi-foundation": "^2.58.0",
+    "@douyinfe/semi-ui": "^2.58.0",
+    "@lark-base-open/js-sdk": "file:/Users/yxk/mydata/文档/多维表格仪表盘插件开发资料/sdk/packages/lark-base-open-js-sdk-1.0.2.tgz",
+    "@semi-bot/semi-theme-feishu-dashboard": "^1.0.4",
+    "@vitejs/plugin-react": "^4.2.1",
+    "classnames": "^2.5.1",
+    "dayjs": "^1.11.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "reset-css": "^5.0.2",
+    "vite": "^5.2.11",
+    "vite-plugin-semi-theming": "^0.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.8",
+    "@testing-library/react": "^15.0.7",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "jsdom": "^24.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
