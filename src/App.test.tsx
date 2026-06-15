@@ -818,6 +818,48 @@ describe('App initialization', () => {
       },
     ]);
   });
+
+  it('clears stale data range options immediately when switching source tables', async () => {
+    const tableBRanges = deferred<unknown[]>();
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: viewDataRange('view-a', '表 A 视图'),
+          viewId: 'view-a',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn((tableId: string) => {
+        if (tableId === 'table-a') {
+          return Promise.resolve([{ type: SourceType.ALL }, viewDataRange('view-a', '表 A 视图')]);
+        }
+        return tableBRanges.promise;
+      }),
+      getCategories: vi.fn(async (tableId: string) => (tableId === 'table-a' ? optionCategories('a') : optionCategories('b'))),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('表 A 视图')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+
+    expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument();
+    expect(screen.queryByText('表 A 视图')).not.toBeInTheDocument();
+
+    await act(async () => {
+      tableBRanges.resolve([{ type: SourceType.ALL }, viewDataRange('view-b', '表 B 视图')]);
+      await tableBRanges.promise;
+    });
+    await waitFor(() => expect(screen.getByText('表 B 视图')).toBeInTheDocument());
+  });
 });
 
 function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntime {

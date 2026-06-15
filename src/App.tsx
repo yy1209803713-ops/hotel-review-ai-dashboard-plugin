@@ -454,13 +454,13 @@ export default function App() {
       return;
     }
     setError(null);
+    setCategories([]);
+    setDataRanges([]);
+    setHostData(null);
+    setOptionRecords([]);
 
     if (!nextTableId.trim()) {
       configSourceRequestId.current += 1;
-      setCategories([]);
-      setDataRanges([]);
-      setHostData(null);
-      setOptionRecords([]);
       return;
     }
 
