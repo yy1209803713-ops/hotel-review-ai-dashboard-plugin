@@ -187,6 +187,23 @@ describe('App initialization', () => {
     expect(runtime.getData).not.toHaveBeenCalled();
   });
 
+  it('does not request preview data when Config state has no source table', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: '' }),
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getTableList).toHaveBeenCalledTimes(1));
+    expect(runtime.getPreviewData).not.toHaveBeenCalled();
+  });
+
   it('normalizes a stale saved view before save when the host has no range options', async () => {
     const runtime = fakeRuntime({
       getState: () => 'Config',
@@ -230,6 +247,54 @@ describe('App initialization', () => {
             dataRange: { type: SourceType.ALL },
           }),
         ],
+        customConfig: expect.objectContaining({
+          source: expect.objectContaining({
+            dataRange: { type: SourceType.ALL },
+            viewId: undefined,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('normalizes a stale saved view to all data even when host ranges list another view first', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [
+          {
+            tableId: 'tbl1',
+            dataRange: viewDataRange('view-stale', '旧视图'),
+            groups: [{ fieldId: 'fld_a_review_id' }],
+            series: 'COUNTA' as const,
+          },
+        ],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          viewId: 'view-stale',
+          dataRange: viewDataRange('view-stale', '旧视图'),
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn(async () => [viewDataRange('view-a', '有效评论'), { type: SourceType.ALL }]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('保存配置'));
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataConditions: [expect.objectContaining({ dataRange: { type: SourceType.ALL } })],
         customConfig: expect.objectContaining({
           source: expect.objectContaining({
             dataRange: { type: SourceType.ALL },
@@ -544,6 +609,67 @@ describe('App initialization', () => {
 
     expect(runtime.getPreviewData).not.toHaveBeenCalled();
     expect(screen.queryByText('插件配置')).not.toBeInTheDocument();
+  });
+
+  it('updates host data from Dashboard data change events and marks rendered', async () => {
+    let dataChangeHandler: ((data: unknown[][]) => void) | undefined;
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [[{ value: 'initial', text: 'initial', groupKey: 'initial' }]]),
+      onDataChange: vi.fn((handler) => {
+        dataChangeHandler = handler;
+        return () => undefined;
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.onDataChange).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.setRendered).mockClear();
+
+    act(() => {
+      dataChangeHandler?.([[{ value: 'changed', text: 'changed', groupKey: 'changed' }]]);
+    });
+
+    expect(runtime.setRendered).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloads saved config after Dashboard config change events outside Create state', async () => {
+    let configChangeHandler: ((config: unknown) => void) | undefined;
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      onConfigChange: vi.fn((handler) => {
+        configChangeHandler = handler as (config: unknown) => void;
+        return () => undefined;
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getConfig).toHaveBeenCalledTimes(1));
+    act(() => {
+      configChangeHandler?.({ dataConditions: [], customConfig: DEFAULT_CONFIG });
+    });
+    await waitFor(() => expect(runtime.getConfig).toHaveBeenCalledTimes(2));
   });
 
   it('prefills missing field mapping from loaded table categories before saving', async () => {

@@ -41,6 +41,7 @@ export default function App() {
   const [currentScope, setCurrentScope] = useState<ScopeSnapshot | null>(null);
   const [optionRecords, setOptionRecords] = useState<ReviewRecord[]>([]);
   const [hostData, setHostData] = useState<unknown[][] | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
   const mountedRef = useRef(true);
@@ -57,6 +58,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const unsubscribeData = runtime.onDataChange((data) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      setHostData(data);
+      runtime.setRendered();
+    });
+    const unsubscribeConfig = runtime.onConfigChange(() => {
+      if (!mountedRef.current || state === 'Create') {
+        return;
+      }
+      setReloadToken((current) => current + 1);
+    });
+
+    return () => {
+      unsubscribeData();
+      unsubscribeConfig();
+    };
+  }, [runtime, state]);
+
+  useEffect(() => {
     async function init() {
       setLoading(true);
       setError(null);
@@ -68,6 +90,7 @@ export default function App() {
       setCategories([]);
       setDataRanges([]);
       setHostData(null);
+      configSourceRequestId.current += 1;
 
       try {
         if (state === 'View' || state === 'FullScreen') {
@@ -129,7 +152,7 @@ export default function App() {
       setFilters(withComputedRange(pluginConfig.filters));
       setAnalysis(pluginConfig.analysisCache?.result ?? null);
       if (!pluginConfig.source.tableId.trim()) {
-        setHostData(await runtime.getPreviewData(buildDataConditions(pluginConfig)));
+        setHostData(null);
         return;
       }
 
@@ -195,7 +218,7 @@ export default function App() {
     }
 
     init();
-  }, [state]);
+  }, [state, reloadToken]);
 
   const stale = useMemo(() => {
     const cacheScope = config.analysisCache?.scopeSnapshot as ScopeSnapshot | undefined;
@@ -712,7 +735,7 @@ function getDataRangeValue(dataRange?: IDataRange): string | undefined {
 }
 
 function normalizeSourceSelection(source: PluginConfig['source'], dataRanges: IDataRange[]): PluginConfig['source'] {
-  const fallbackDataRange = dataRanges[0] ?? ({ type: SourceType.ALL } as IDataRange);
+  const fallbackDataRange = dataRanges.find((dataRange) => dataRange.type === SourceType.ALL) ?? ({ type: SourceType.ALL } as IDataRange);
   const requestedValue = getDataRangeValue(source.dataRange);
   const resolvedDataRange = requestedValue
     ? dataRanges.find((dataRange) => getDataRangeValue(dataRange) === requestedValue) ?? fallbackDataRange
