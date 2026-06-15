@@ -1,4 +1,5 @@
 import { Banner, Button, Input, InputNumber, Select, Switch } from '@douyinfe/semi-ui';
+import { DEFAULT_CONFIG } from '../constants/defaults';
 import type { RuntimeCategory, RuntimeTable } from '../runtime/sdk';
 import type { PluginConfig } from '../types/config';
 
@@ -31,7 +32,14 @@ export function ConfigPanel(props: {
           <ConfigSelect
             value={props.config.source.tableId}
             optionList={props.tables.map((table) => ({ label: table.tableName, value: table.tableId }))}
-            onChange={(value) => updateSource({ tableId: String(value), viewId: undefined, dataRange: undefined })}
+            onChange={(value) =>
+              updateSource({
+                tableId: String(value),
+                viewId: undefined,
+                dataRange: undefined,
+                fields: { ...DEFAULT_CONFIG.source.fields },
+              })
+            }
           />
         </Field>
         <div className="config-group-title">字段映射</div>

@@ -11,6 +11,17 @@ export const REQUIRED_FIELD_KEYS = [
   'roomType',
 ] as const satisfies readonly (keyof FieldMapping)[];
 
+export const FIELD_LABELS: Record<keyof FieldMapping, string> = {
+  reviewId: '评论 ID',
+  content: '评论内容',
+  hotelName: '酒店名称',
+  score: '评分',
+  reviewDate: '评论日期',
+  checkInMonth: '入住日期',
+  replyContent: '回复内容',
+  roomType: '房型',
+};
+
 export const TOPIC_CATEGORIES = [
   '位置',
   '服务',

@@ -82,6 +82,7 @@ describe('ConfigPanel', () => {
         tableId: 'new-table',
         viewId: undefined,
         dataRange: undefined,
+        fields: DEFAULT_CONFIG.source.fields,
       },
     });
   });

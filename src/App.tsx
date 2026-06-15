@@ -2,17 +2,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@douyinfe/semi-ui';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DashboardShell } from './components/DashboardShell';
-import { DEFAULT_CONFIG } from './constants/defaults';
+import { DEFAULT_CONFIG, FIELD_LABELS } from './constants/defaults';
 import { getPeriodRange } from './services/filtering';
 import { normalizeReviewRecord, readReviewRecords } from './services/baseRecords';
 import { filterReviews } from './services/filtering';
+import { getMissingRequiredFields, suggestFieldMapping } from './services/fieldMapping';
 import { runAnalysis } from './services/analysisPipeline';
 import { ANALYSIS_COPY_VERSION, buildScopeSnapshot, isCacheStale, type ScopeSnapshot } from './services/stats';
 import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './services/cacheStore';
 import { writeAnalysisResult } from './services/writeback';
 import { formatAiClientError, testAiConnection } from './services/aiClient';
 import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
-import type { AnalysisCache, FilterState, PeriodType, PluginConfig } from './types/config';
+import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
 
 const EVIDENCE_PAGE_SIZE = 10;
@@ -66,8 +67,16 @@ export default function App() {
         if (!mounted) {
           return;
         }
-        setCategories(categoryList as RuntimeCategory[]);
-        readRecordsForConfig(runtime, pluginConfig)
+        const runtimeCategories = categoryList as RuntimeCategory[];
+        const configWithSuggestedFields = withSuggestedFieldMapping(pluginConfig, runtimeCategories);
+        setConfig(configWithSuggestedFields);
+        setCategories(runtimeCategories);
+        if (getMissingRequiredFields(configWithSuggestedFields.source.fields).length) {
+          setOptionRecords([]);
+          return;
+        }
+
+        readRecordsForConfig(runtime, configWithSuggestedFields)
           .then((records) => {
             if (mounted) {
               setOptionRecords(records);
@@ -113,6 +122,13 @@ export default function App() {
     const runStartedAt = getNowMs();
 
     setError(null);
+    const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
+    if (missingFieldMessage) {
+      setError(missingFieldMessage);
+      Toast.error(missingFieldMessage);
+      return;
+    }
+
     setLoading(true);
     Toast.info('开始读取评论并更新 AI 聚合分析');
 
@@ -270,6 +286,14 @@ export default function App() {
   }
 
   async function handleSaveConfig() {
+    setError(null);
+    const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
+    if (missingFieldMessage) {
+      setError(missingFieldMessage);
+      Toast.error(missingFieldMessage);
+      return;
+    }
+
     setSaving(true);
     try {
       await savePluginConfig(runtime, { ...config, filters });
@@ -287,6 +311,11 @@ export default function App() {
       setOptionRecords([]);
       return;
     }
+    if (getMissingRequiredFields(pluginConfig.source.fields).length) {
+      setOptionRecords([]);
+      return;
+    }
+
     const records = await readRecordsForConfig(runtime, pluginConfig);
     setOptionRecords(records);
   }
@@ -307,8 +336,11 @@ export default function App() {
 
     try {
       const categoryList = await runtime.getCategories(nextTableId);
-      setCategories(categoryList as RuntimeCategory[]);
-      loadFilterOptionRecords(nextConfig).catch(() => undefined);
+      const runtimeCategories = categoryList as RuntimeCategory[];
+      const configWithSuggestedFields = withSuggestedFieldMapping(nextConfig, runtimeCategories);
+      setConfig(configWithSuggestedFields);
+      setCategories(runtimeCategories);
+      loadFilterOptionRecords(configWithSuggestedFields).catch(() => undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '读取字段配置失败');
     }
@@ -417,6 +449,40 @@ function uniqueSorted(values: string[], selectedValue: string): string[] {
     return [selectedValue, ...uniqueValues];
   }
   return uniqueValues;
+}
+
+function withSuggestedFieldMapping(pluginConfig: PluginConfig, fields: RuntimeCategory[]): PluginConfig {
+  const suggestedFields = suggestFieldMapping(fields);
+  let changed = false;
+  const nextFields = { ...pluginConfig.source.fields };
+
+  for (const key of getMissingRequiredFields(nextFields)) {
+    if (suggestedFields[key]) {
+      nextFields[key] = suggestedFields[key];
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return pluginConfig;
+  }
+
+  return {
+    ...pluginConfig,
+    source: {
+      ...pluginConfig.source,
+      fields: nextFields,
+    },
+  };
+}
+
+function getMissingFieldMappingMessage(fields: FieldMapping): string | null {
+  const missingFields = getMissingRequiredFields(fields);
+  if (!missingFields.length) {
+    return null;
+  }
+
+  return `请先完成字段映射：${missingFields.map((key) => FIELD_LABELS[key]).join('、')}`;
 }
 
 type AnalysisTimingStatus = 'success' | 'error' | 'skipped';
