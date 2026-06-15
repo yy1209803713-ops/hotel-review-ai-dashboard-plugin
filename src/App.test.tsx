@@ -1608,7 +1608,12 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
   return {
     isFixture: false,
     getState: () => 'Config',
-    getTheme: vi.fn(),
+    getTheme: vi.fn(async () => ({
+      theme: 'LIGHT' as const,
+      chartBgColor: '#ffffff',
+      labelColorTokenList: ['#111827', '#6b7280'],
+      themePalette: ['#2563eb', '#16a34a', '#dc2626'],
+    })),
     onThemeChange: vi.fn(() => () => undefined),
     getConfig: vi.fn(async () => ({ dataConditions: [], customConfig: DEFAULT_CONFIG })),
     getPreviewData: vi.fn(async () => []),

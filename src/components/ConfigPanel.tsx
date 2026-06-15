@@ -34,145 +34,166 @@ export function ConfigPanel(props: {
     <aside className="config-panel">
       <div className="config-scroll">
         <h2>插件配置</h2>
-        <Banner
-          type="warning"
-          closeIcon={null}
-          description="API Key 直连仅适合自用阶段；公开上架前需要迁移到后端代理。"
-        />
-        <Field label="数据表">
-          <ConfigSelect
-            value={props.config.source.tableId}
-            optionList={props.tables.map((table) => ({ label: table.tableName, value: table.tableId }))}
-            onChange={(value) =>
-              updateSource({
-                tableId: String(value),
-                viewId: undefined,
-                dataRange: undefined,
-                fields: { ...DEFAULT_CONFIG.source.fields },
-              })
-            }
-          />
-        </Field>
-        <Field label="数据范围">
-          <ConfigSelect
-            value={selectedDataRangeValue}
-            optionList={dataRangeOptions}
-            onChange={(value) => {
-              const dataRange = dataRangeOptions.find((option) => option.value === value)?.dataRange;
-              updateSource({
-                dataRange,
-                viewId: getViewIdFromDataRange(dataRange),
-              });
-            }}
-          />
-        </Field>
-        <div className="config-group-title">字段映射</div>
-        {missingFields.length ? (
+        <section className="config-section">
+          <div className="config-section-head">
+            <h3>数据源</h3>
+          </div>
           <Banner
             type="warning"
             closeIcon={null}
-            description={`缺少字段映射：${missingFields.map((key) => FIELD_LABELS[key]).join('、')}`}
+            description="API Key 直连仅适合自用阶段；公开上架前需要迁移到后端代理。"
           />
-        ) : null}
-        {fieldRows.map((row) => (
-          <Field label={row.label} key={row.key}>
+          <Field label="数据表">
             <ConfigSelect
-              value={props.config.source.fields[row.key]}
-              optionList={props.categories.map((field) => ({ label: field.fieldName, value: field.fieldId }))}
-              onChange={(value) => updateFields(row.key, String(value))}
+              value={props.config.source.tableId}
+              optionList={props.tables.map((table) => ({ label: table.tableName, value: table.tableId }))}
+              onChange={(value) =>
+                updateSource({
+                  tableId: String(value),
+                  viewId: undefined,
+                  dataRange: undefined,
+                  fields: { ...DEFAULT_CONFIG.source.fields },
+                })
+              }
             />
           </Field>
-        ))}
-        <div className="config-group-title">AI API</div>
-        <Field label="API Base URL">
-          <Input
-            name="hotel-review-ai-api-base-url"
-            autoComplete="off"
-            spellCheck={false}
-            value={props.config.ai.apiBaseUrl}
-            onChange={(value) => updateAi({ apiBaseUrl: value })}
-          />
-        </Field>
-        <Field label="API Key">
-          <Input
-            name="hotel-review-ai-api-key"
-            autoComplete="new-password"
-            mode="password"
-            spellCheck={false}
-            value={props.config.ai.apiKey}
-            onChange={(value) => updateAi({ apiKey: value })}
-          />
-        </Field>
-        <Field label="Model">
-          <Input
-            name="hotel-review-ai-model"
-            autoComplete="off"
-            spellCheck={false}
-            value={props.config.ai.model}
-            onChange={(value) => updateAi({ model: value })}
-          />
-        </Field>
-        <div className="config-inline">
-          <Field label="Temperature">
-            <InputNumber
-              value={props.config.ai.temperature}
-              min={0}
-              max={2}
-              step={0.1}
-              onChange={(value) => updateAi({ temperature: typeof value === 'number' ? value : 0.2 })}
+          <Field label="数据范围">
+            <ConfigSelect
+              value={selectedDataRangeValue}
+              optionList={dataRangeOptions}
+              onChange={(value) => {
+                const dataRange = dataRangeOptions.find((option) => option.value === value)?.dataRange;
+                updateSource({
+                  dataRange,
+                  viewId: getViewIdFromDataRange(dataRange),
+                });
+              }}
             />
           </Field>
-          <Field label="Top N">
-            <InputNumber
-              value={props.config.ai.topN}
-              min={3}
-              max={20}
-              onChange={(value) => updateAi({ topN: typeof value === 'number' ? value : 10 })}
-            />
-          </Field>
-        </div>
-        <Field label="批次大小">
-          <InputNumber
-            value={props.config.ai.maxBatchSize}
-            min={10}
-            max={200}
-            onChange={(value) => updateAi({ maxBatchSize: typeof value === 'number' ? value : 10 })}
-          />
-        </Field>
-        <Field label="并发数">
-          <InputNumber
-            value={props.config.ai.batchConcurrency ?? 3}
-            min={1}
-            max={20}
-            onChange={(value) => updateAi({ batchConcurrency: typeof value === 'number' ? value : 3 })}
-          />
-        </Field>
-        <div className="config-switch">
-          <span>写回 Base 聚合结果</span>
-          <Switch
-            checked={props.config.writeback.enabled}
-            onChange={(checked) =>
-              update({
-                writeback: {
-                  ...props.config.writeback,
-                  enabled: Boolean(checked),
-                  confirmed: Boolean(checked) ? props.config.writeback.confirmed : false,
-                },
-              })
-            }
-          />
-        </div>
-        {props.config.writeback.enabled && !props.config.writeback.confirmed ? (
-          <div className="writeback-confirm">
-            <span>首次写回会创建「AI分析批次」和「AI主题汇总」两张表。</span>
-            <Button
-              size="small"
-              onClick={() => update({ writeback: { ...props.config.writeback, confirmed: true } })}
-            >
-              确认创建
-            </Button>
+        </section>
+
+        <section className="config-section">
+          <div className="config-section-head">
+            <h3>字段映射</h3>
           </div>
-        ) : null}
+          {missingFields.length ? (
+            <Banner
+              type="warning"
+              closeIcon={null}
+              description={`缺少字段映射：${missingFields.map((key) => FIELD_LABELS[key]).join('、')}`}
+            />
+          ) : null}
+          {fieldRows.map((row) => (
+            <Field label={row.label} key={row.key}>
+              <ConfigSelect
+                value={props.config.source.fields[row.key]}
+                optionList={props.categories.map((field) => ({ label: field.fieldName, value: field.fieldId }))}
+                onChange={(value) => updateFields(row.key, String(value))}
+              />
+            </Field>
+          ))}
+        </section>
+
+        <section className="config-section">
+          <div className="config-section-head">
+            <h3>AI API</h3>
+          </div>
+          <Field label="API Base URL">
+            <Input
+              name="hotel-review-ai-api-base-url"
+              autoComplete="off"
+              spellCheck={false}
+              value={props.config.ai.apiBaseUrl}
+              onChange={(value) => updateAi({ apiBaseUrl: value })}
+            />
+          </Field>
+          <Field label="API Key">
+            <Input
+              name="hotel-review-ai-api-key"
+              autoComplete="new-password"
+              mode="password"
+              spellCheck={false}
+              value={props.config.ai.apiKey}
+              onChange={(value) => updateAi({ apiKey: value })}
+            />
+          </Field>
+          <Field label="Model">
+            <Input
+              name="hotel-review-ai-model"
+              autoComplete="off"
+              spellCheck={false}
+              value={props.config.ai.model}
+              onChange={(value) => updateAi({ model: value })}
+            />
+          </Field>
+          <div className="config-inline">
+            <Field label="Temperature">
+              <InputNumber
+                value={props.config.ai.temperature}
+                min={0}
+                max={2}
+                step={0.1}
+                onChange={(value) => updateAi({ temperature: typeof value === 'number' ? value : 0.2 })}
+              />
+            </Field>
+            <Field label="Top N">
+              <InputNumber
+                value={props.config.ai.topN}
+                min={3}
+                max={20}
+                onChange={(value) => updateAi({ topN: typeof value === 'number' ? value : 10 })}
+              />
+            </Field>
+          </div>
+          <Field label="批次大小">
+            <InputNumber
+              value={props.config.ai.maxBatchSize}
+              min={10}
+              max={200}
+              onChange={(value) => updateAi({ maxBatchSize: typeof value === 'number' ? value : 10 })}
+            />
+          </Field>
+          <Field label="并发数">
+            <InputNumber
+              value={props.config.ai.batchConcurrency ?? 3}
+              min={1}
+              max={20}
+              onChange={(value) => updateAi({ batchConcurrency: typeof value === 'number' ? value : 3 })}
+            />
+          </Field>
+        </section>
+
+        <section className="config-section">
+          <div className="config-section-head">
+            <h3>写回设置</h3>
+          </div>
+          <div className="config-switch">
+            <span>写回 Base 聚合结果</span>
+            <Switch
+              checked={props.config.writeback.enabled}
+              onChange={(checked) =>
+                update({
+                  writeback: {
+                    ...props.config.writeback,
+                    enabled: Boolean(checked),
+                    confirmed: Boolean(checked) ? props.config.writeback.confirmed : false,
+                  },
+                })
+              }
+            />
+          </div>
+          {props.config.writeback.enabled && !props.config.writeback.confirmed ? (
+            <div className="writeback-confirm">
+              <span>首次写回会创建「AI分析批次」和「AI主题汇总」两张表。</span>
+              <Button
+                size="small"
+                onClick={() => update({ writeback: { ...props.config.writeback, confirmed: true } })}
+              >
+                确认创建
+              </Button>
+            </div>
+          ) : null}
+        </section>
       </div>
       <div className="config-actions">
         <Button disabled={props.disabled} loading={props.testingConnection} onClick={props.onTestConnection}>

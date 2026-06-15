@@ -62,6 +62,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.classList.toggle('full-screen', state === 'FullScreen');
+    runtime.getTheme().then((theme) => {
+      if (mountedRef.current) {
+        document.documentElement.setAttribute('theme-mode', theme.theme === 'DARK' ? 'dark' : 'light');
+      }
+    }).catch(() => undefined);
+    const unsubscribeTheme = runtime.onThemeChange((theme) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      document.documentElement.setAttribute('theme-mode', theme.theme === 'DARK' ? 'dark' : 'light');
+    });
     const unsubscribeData = runtime.onDataChange((data) => {
       if (!mountedRef.current) {
         return;
@@ -88,6 +100,8 @@ export default function App() {
     });
 
     return () => {
+      document.documentElement.classList.remove('full-screen');
+      unsubscribeTheme();
       unsubscribeData();
       unsubscribeConfig();
     };

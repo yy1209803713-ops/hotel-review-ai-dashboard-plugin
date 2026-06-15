@@ -26,6 +26,13 @@ npm test -- --run
 npm run build
 ```
 
+## Dashboard Plugin UI Verification
+
+- `?state=Create`: config layout renders without horizontal overflow.
+- `?state=Config`: grouped config panel renders and save action is visible.
+- `?state=View`: config panel is hidden.
+- `?state=FullScreen`: transparent/dark background is applied and content does not overlap.
+
 ---
 
 更新时间：2026-06-11
