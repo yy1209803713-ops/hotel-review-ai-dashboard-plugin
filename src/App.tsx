@@ -454,6 +454,8 @@ export default function App() {
     if (!nextTableId.trim()) {
       configSourceRequestId.current += 1;
       setCategories([]);
+      setDataRanges([]);
+      setHostData(null);
       setOptionRecords([]);
       return;
     }
@@ -461,14 +463,33 @@ export default function App() {
     const requestId = configSourceRequestId.current + 1;
     configSourceRequestId.current = requestId;
     try {
-      const categoryList = await runtime.getCategories(nextTableId);
+      const [categoryList, dataRangeList] = await Promise.all([
+        runtime.getCategories(nextTableId),
+        runtime.getTableDataRange(nextTableId),
+      ]);
       if (configSourceRequestId.current !== requestId) {
         return;
       }
       const runtimeCategories = categoryList as RuntimeCategory[];
-      const configWithSuggestedFields = withSuggestedFieldMapping(nextConfig, runtimeCategories);
+      const configWithSuggestedFields = withSuggestedFieldMapping(
+        {
+          ...nextConfig,
+          source: {
+            ...nextConfig.source,
+            dataRange: (dataRangeList[0] as IDataRange | undefined) ?? nextConfig.source.dataRange,
+            viewId: getViewIdFromDataRange(dataRangeList[0] as IDataRange | undefined),
+          },
+        },
+        runtimeCategories,
+      );
       setConfig(configWithSuggestedFields);
       setCategories(runtimeCategories);
+      setDataRanges(dataRangeList as IDataRange[]);
+      const previewData = await runtime.getPreviewData(buildDataConditions(configWithSuggestedFields));
+      if (configSourceRequestId.current !== requestId) {
+        return;
+      }
+      setHostData(previewData);
       loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
     } catch (cause) {
       if (configSourceRequestId.current !== requestId) {
@@ -637,6 +658,10 @@ function getSaveValidationMessage(config: PluginConfig): string | null {
   }
 
   return null;
+}
+
+function getViewIdFromDataRange(dataRange?: IDataRange): string | undefined {
+  return dataRange?.type === 'VIEW' ? dataRange.viewId : undefined;
 }
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {

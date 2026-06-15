@@ -729,6 +729,51 @@ describe('App initialization', () => {
     fireEvent.change(screen.getByDisplayValue('表 C'), { target: { value: '' } });
     await waitFor(() => expect(screen.queryByText('表 B 字段读取失败')).not.toBeInTheDocument());
   });
+
+  it('refreshes data ranges and preview data after switching source tables', async () => {
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: viewDataRange('view-a', '表 A 视图'),
+          viewId: 'view-a',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn(async (tableId: string) => {
+        if (tableId === 'table-a') {
+          return [{ type: SourceType.ALL }, viewDataRange('view-a', '表 A 视图')];
+        }
+        return [{ type: SourceType.ALL }, viewDataRange('view-b', '表 B 视图')];
+      }),
+      getCategories: vi.fn(async (tableId: string) => (tableId === 'table-a' ? optionCategories('a') : optionCategories('b'))),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('表 A 视图')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+
+    await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
+    expect(screen.queryByText('表 A 视图')).not.toBeInTheDocument();
+    expect(screen.getByText('表 B 视图')).toBeInTheDocument();
+    expect(runtime.getTableDataRange).toHaveBeenCalledWith('table-b');
+    expect(runtime.getPreviewData).toHaveBeenLastCalledWith([
+      {
+        tableId: 'table-b',
+        dataRange: { type: SourceType.ALL },
+        groups: [{ fieldId: 'fld_b_review_id' }],
+        series: 'COUNTA',
+      },
+    ]);
+  });
 });
 
 function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntime {
