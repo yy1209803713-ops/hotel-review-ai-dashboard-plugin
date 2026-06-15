@@ -420,6 +420,112 @@ describe('App initialization', () => {
     expect(screen.queryByText('表 B 字段读取失败')).not.toBeInTheDocument();
     expect(screen.queryByText('读取字段配置失败')).not.toBeInTheDocument();
   });
+
+  it('ignores stale option records from a save refresh after switching tables', async () => {
+    const saveRefreshPage = deferred<RecordsPage>();
+    let tableACalls = 0;
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getCategories: vi.fn(async (tableId: string) => {
+        if (tableId === 'table-a') {
+          return optionCategories('a');
+        }
+        if (tableId === 'table-c') {
+          return optionCategories('c');
+        }
+        return [];
+      }),
+      readRecordsPage: vi.fn((tableId: string) => {
+        if (tableId === 'table-a') {
+          tableACalls += 1;
+          if (tableACalls === 1) {
+            return Promise.resolve({
+              records: [optionRecord('a', '表 A 酒店', '2026-04-01 00:00:00')],
+              hasMore: false,
+            });
+          }
+          return saveRefreshPage.promise;
+        }
+        return Promise.resolve({
+          records: [optionRecord('c', '表 C 酒店', '2026-06-01 00:00:00')],
+          hasMore: false,
+        });
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('表 A 酒店')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => expect(tableACalls).toBe(2));
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-c' } });
+
+    await waitFor(() => expect(screen.getByText('表 C 酒店')).toBeInTheDocument());
+    await act(async () => {
+      saveRefreshPage.resolve({
+        records: [optionRecord('a', '表 A 保存后酒店', '2026-05-01 00:00:00')],
+        hasMore: false,
+      });
+      await saveRefreshPage.promise;
+    });
+
+    expect(screen.getByText('表 C 酒店')).toBeInTheDocument();
+    expect(screen.queryByText('表 A 保存后酒店')).not.toBeInTheDocument();
+  });
+
+  it('clears existing source errors after selecting a valid table or an empty table', async () => {
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: 'table-a' }),
+      })),
+      getCategories: vi.fn((tableId: string) => {
+        if (tableId === 'table-b') {
+          return Promise.reject(new Error('表 B 字段读取失败'));
+        }
+        if (tableId === 'table-c') {
+          return Promise.resolve(optionCategories('c'));
+        }
+        return Promise.resolve([]);
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('c', '表 C 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('表 A')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+    await waitFor(() => expect(screen.getByText('表 B 字段读取失败')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('表 B'), { target: { value: 'table-c' } });
+    await waitFor(() => expect(screen.getByDisplayValue('表 C')).toBeInTheDocument());
+    expect(screen.queryByText('表 B 字段读取失败')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByDisplayValue('表 C'), { target: { value: '' } });
+    await waitFor(() => expect(screen.queryByText('表 B 字段读取失败')).not.toBeInTheDocument());
+  });
 });
 
 function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntime {
@@ -473,9 +579,14 @@ const aliasCategories: RuntimeCategory[] = [
 
 function optionCategories(prefix: string): RuntimeCategory[] {
   return [
+    { fieldId: `fld_${prefix}_review_id`, fieldName: '评论ID', fieldType: 'text' },
     { fieldId: `fld_${prefix}_content`, fieldName: '评论内容', fieldType: 'text' },
     { fieldId: `fld_${prefix}_hotel`, fieldName: '酒店名称', fieldType: 'text' },
+    { fieldId: `fld_${prefix}_score`, fieldName: '评分', fieldType: 'number' },
+    { fieldId: `fld_${prefix}_review_date`, fieldName: '评论日期', fieldType: 'text' },
     { fieldId: `fld_${prefix}_checkin`, fieldName: '入住月份', fieldType: 'text' },
+    { fieldId: `fld_${prefix}_reply`, fieldName: '回复内容', fieldType: 'text' },
+    { fieldId: `fld_${prefix}_room`, fieldName: '房型', fieldType: 'text' },
   ];
 }
 
@@ -483,10 +594,29 @@ function optionRecord(prefix: string, hotelName: string, checkInMonth: string) {
   return {
     recordId: `rec-${prefix}`,
     fields: {
+      [`fld_${prefix}_review_id`]: `review-${prefix}`,
       [`fld_${prefix}_content`]: `${hotelName} 评论`,
       [`fld_${prefix}_hotel`]: hotelName,
+      [`fld_${prefix}_score`]: 5,
+      [`fld_${prefix}_review_date`]: '2026-06-01 00:00:00',
       [`fld_${prefix}_checkin`]: checkInMonth,
+      [`fld_${prefix}_reply`]: '',
+      [`fld_${prefix}_room`]: '大床房',
     },
+  };
+}
+
+function optionFieldMapping(prefix: string): PluginConfig['source']['fields'] {
+  return {
+    ...DEFAULT_CONFIG.source.fields,
+    reviewId: `fld_${prefix}_review_id`,
+    content: `fld_${prefix}_content`,
+    hotelName: `fld_${prefix}_hotel`,
+    score: `fld_${prefix}_score`,
+    reviewDate: `fld_${prefix}_review_date`,
+    checkInMonth: `fld_${prefix}_checkin`,
+    replyContent: `fld_${prefix}_reply`,
+    roomType: `fld_${prefix}_room`,
   };
 }
 

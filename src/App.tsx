@@ -296,9 +296,11 @@ export default function App() {
     }
 
     setSaving(true);
+    const configToSave = { ...config, filters };
+    const sourceRequestId = configSourceRequestId.current;
     try {
-      await savePluginConfig(runtime, { ...config, filters });
-      loadFilterOptionRecords({ ...config, filters }).catch(() => undefined);
+      await savePluginConfig(runtime, configToSave);
+      loadFilterOptionRecords(configToSave, sourceRequestId).catch(() => undefined);
       Toast.success('配置已保存');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '保存配置失败');
@@ -335,6 +337,7 @@ export default function App() {
     if (nextTableId === previousTableId) {
       return;
     }
+    setError(null);
 
     if (!nextTableId.trim()) {
       configSourceRequestId.current += 1;
