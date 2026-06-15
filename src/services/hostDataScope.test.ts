@@ -33,6 +33,13 @@ describe('hostDataScope', () => {
     expect(buildHostDataSignal(data)).toBe('host-visible-review-ids:1001|1002');
   });
 
+  it('treats review ID header-only Dashboard data as an empty visible scope', () => {
+    const data = [[{ value: '评论ID', text: '评论ID', groupKey: null }]];
+
+    expect(parseHostVisibleReviewIds(data)).toEqual(new Set());
+    expect(buildHostDataSignal(data)).toBe('host-visible-review-ids:');
+  });
+
   it('returns null when Dashboard data is not grouped by review ID', () => {
     const data = [
       [{ value: '记录数', text: '记录数', groupKey: null }],

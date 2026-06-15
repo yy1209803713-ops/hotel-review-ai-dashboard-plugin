@@ -186,10 +186,15 @@ export default function App() {
       setConfig(pluginConfig);
       setFilters(withComputedRange(pluginConfig.filters));
       setAnalysis(pluginConfig.analysisCache?.result ?? null);
-      setCurrentScope(pluginConfig.analysisCache?.scopeSnapshot ? (pluginConfig.analysisCache.scopeSnapshot as ScopeSnapshot) : null);
       setDataRanges([]);
       setCategories([]);
-      setHostData(await runtime.getData());
+      const hostDataSnapshot = await runtime.getData();
+      setHostData(hostDataSnapshot);
+      if (pluginConfig.analysisCache?.scopeSnapshot) {
+        setCurrentScope(buildCurrentScope(pluginConfig, hostDataSnapshot, pluginConfig.analysisCache.scopeSnapshot as ScopeSnapshot));
+      } else {
+        setCurrentScope(null);
+      }
       if (pluginConfig.source.tableId.trim()) {
         await loadFilterOptionRecords(pluginConfig);
       }
@@ -228,6 +233,13 @@ export default function App() {
           return;
         }
         setHostData(previewData);
+        setCurrentScope(
+          buildCurrentScope(
+            configWithSuggestedFields,
+            previewData,
+            configWithSuggestedFields.analysisCache?.scopeSnapshot as ScopeSnapshot | undefined,
+          ),
+        );
       }
 
       if (hasFilterOptionRequiredFields(configWithSuggestedFields.source.fields)) {
@@ -285,8 +297,7 @@ export default function App() {
     if (!hostVisibleReviewIds) {
       const message = HOST_DATA_SCOPE_UNSUPPORTED_MESSAGE;
       setScopeWarning(message);
-      setError(message);
-      Toast.error(message);
+      Toast.warning(message);
       return;
     }
 
@@ -310,11 +321,7 @@ export default function App() {
         return;
       }
 
-      const sourceScope = {
-        tableId: config.source.tableId,
-        dataRange: config.source.dataRange,
-        hostDataSignal: buildHostDataSignal(hostData),
-      };
+      const sourceScope = buildCurrentSourceScope(config, hostData);
       const scope = buildScopeSnapshot(filtered, filters, config.source.fields, config.ai.model, sourceScope);
       const result = await measureAnalysisStep(timingRows, 'AI 总耗时', () => runAnalysis({
         records: filtered,
@@ -526,6 +533,7 @@ export default function App() {
             return;
           }
           setHostData(previewData);
+          setCurrentScope(buildCurrentScope(nextConfig, previewData, nextConfig.analysisCache?.scopeSnapshot as ScopeSnapshot | undefined));
           setOptionRecords(optionRecordsResult ?? []);
         } catch (cause) {
           if (!isCurrentConfigSourceRequest(requestId)) {
@@ -589,6 +597,13 @@ export default function App() {
         return;
       }
       setHostData(previewData);
+      setCurrentScope(
+        buildCurrentScope(
+          configWithSuggestedFields,
+          previewData,
+          configWithSuggestedFields.analysisCache?.scopeSnapshot as ScopeSnapshot | undefined,
+        ),
+      );
       loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
     } catch (cause) {
       if (!isCurrentConfigSourceRequest(requestId)) {
@@ -601,20 +616,7 @@ export default function App() {
   function handleFilterChange(nextFilters: FilterState) {
     setFilters(nextFilters);
     if (analysis) {
-      setCurrentScope({
-        filters: nextFilters,
-        fields: config.source.fields,
-        model: config.ai.model,
-        analysisCopyVersion: ANALYSIS_COPY_VERSION,
-        totalReviews: config.analysisCache?.result.overview.totalReviews ?? 0,
-        firstRecordId: '',
-        lastRecordId: '',
-        source: {
-          tableId: config.source.tableId,
-          dataRange: config.source.dataRange,
-          hostDataSignal: buildHostDataSignal(hostData),
-        },
-      });
+      setCurrentScope(buildCurrentScope(config, hostData, currentScope, nextFilters));
     }
   }
 
@@ -700,6 +702,37 @@ function withComputedRange(filters: FilterState): FilterState {
   return {
     ...filters,
     ...getPeriodRange(filters.periodType),
+  };
+}
+
+function buildCurrentScope(
+  pluginConfig: PluginConfig,
+  hostDataSnapshot: unknown[][] | null,
+  cachedScope?: ScopeSnapshot | null,
+  nextFilters?: FilterState,
+): ScopeSnapshot | null {
+  if (!cachedScope && !pluginConfig.analysisCache?.result) {
+    return null;
+  }
+
+  const currentFilters = nextFilters ?? withComputedRange(pluginConfig.filters);
+  return {
+    filters: currentFilters,
+    fields: pluginConfig.source.fields,
+    model: pluginConfig.ai.model,
+    analysisCopyVersion: ANALYSIS_COPY_VERSION,
+    totalReviews: cachedScope?.totalReviews ?? pluginConfig.analysisCache?.result.overview.totalReviews ?? 0,
+    firstRecordId: cachedScope?.firstRecordId ?? null,
+    lastRecordId: cachedScope?.lastRecordId ?? null,
+    source: buildCurrentSourceScope(pluginConfig, hostDataSnapshot),
+  };
+}
+
+function buildCurrentSourceScope(pluginConfig: PluginConfig, hostDataSnapshot: unknown[][] | null): ScopeSnapshot['source'] {
+  return {
+    tableId: pluginConfig.source.tableId,
+    dataRange: pluginConfig.source.dataRange,
+    hostDataSignal: buildHostDataSignal(hostDataSnapshot),
   };
 }
 

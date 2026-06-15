@@ -1010,6 +1010,183 @@ describe('App initialization', () => {
     );
   });
 
+  it('marks cached analysis stale on first display load when host data scope differs from cached scope', async () => {
+    const cachedScope = {
+      filters: DEFAULT_CONFIG.filters,
+      fields: optionFieldMapping('a'),
+      model: DEFAULT_CONFIG.ai.model,
+      analysisCopyVersion: 'v1.2-conversational-copy',
+      totalReviews: 1,
+      firstRecordId: 'rec-review-a',
+      lastRecordId: 'rec-review-a',
+      source: {
+        tableId: 'tbl1',
+        dataRange: undefined,
+        hostDataSignal: 'host-visible-review-ids:review-a',
+      },
+    };
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withAiKey(
+            withSource({
+              tableId: 'tbl1',
+              fields: optionFieldMapping('a'),
+            }),
+          ),
+          analysisCache: {
+            result: createAnalysisResult(1),
+            scopeSnapshot: cachedScope,
+            sourceSnapshot: withSource({
+              tableId: 'tbl1',
+              fields: optionFieldMapping('a'),
+            }).source,
+            model: DEFAULT_CONFIG.ai.model,
+            generatedAt: '2026-06-16T00:00:00.000Z',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-b', '表 A 新酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
+  });
+
+  it('marks cached analysis stale on first display load when the source view changes but host IDs stay the same', async () => {
+    const cachedScope = {
+      filters: DEFAULT_CONFIG.filters,
+      fields: optionFieldMapping('a'),
+      model: DEFAULT_CONFIG.ai.model,
+      analysisCopyVersion: 'v1.2-conversational-copy',
+      totalReviews: 1,
+      firstRecordId: 'rec-review-a',
+      lastRecordId: 'rec-review-a',
+      source: {
+        tableId: 'tbl1',
+        dataRange: viewDataRange('view-a', '有效评论'),
+        hostDataSignal: 'host-visible-review-ids:review-a',
+      },
+    };
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withAiKey(
+            withSource({
+              tableId: 'tbl1',
+              viewId: 'view-b',
+              dataRange: viewDataRange('view-b', '有效评论'),
+              fields: optionFieldMapping('a'),
+            }),
+          ),
+          analysisCache: {
+            result: createAnalysisResult(1),
+            scopeSnapshot: cachedScope,
+            sourceSnapshot: withSource({
+              tableId: 'tbl1',
+              viewId: 'view-a',
+              dataRange: viewDataRange('view-a', '有效评论'),
+              fields: optionFieldMapping('a'),
+            }).source,
+            model: DEFAULT_CONFIG.ai.model,
+            generatedAt: '2026-06-16T00:00:00.000Z',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 新酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
+  });
+
+  it('marks cached analysis stale on first display load when the saved AI model changes', async () => {
+    const cachedScope = {
+      filters: DEFAULT_CONFIG.filters,
+      fields: optionFieldMapping('a'),
+      model: DEFAULT_CONFIG.ai.model,
+      analysisCopyVersion: 'v1.2-conversational-copy',
+      totalReviews: 1,
+      firstRecordId: 'rec-review-a',
+      lastRecordId: 'rec-review-a',
+      source: {
+        tableId: 'tbl1',
+        dataRange: undefined,
+        hostDataSignal: 'host-visible-review-ids:review-a',
+      },
+    };
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withAiKey({
+            ...withSource({
+              tableId: 'tbl1',
+              fields: optionFieldMapping('a'),
+            }),
+            ai: {
+              ...DEFAULT_CONFIG.ai,
+              apiKey: 'sk-test',
+              model: 'qwen-max',
+            },
+          }),
+          analysisCache: {
+            result: createAnalysisResult(1),
+            scopeSnapshot: cachedScope,
+            sourceSnapshot: withSource({
+              tableId: 'tbl1',
+              fields: optionFieldMapping('a'),
+            }).source,
+            model: DEFAULT_CONFIG.ai.model,
+            generatedAt: '2026-06-16T00:00:00.000Z',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
+  });
+
   it('keeps the latest selected table when category requests resolve out of order', async () => {
     const runtime = fakeRuntime({
       getTableList: vi.fn(async () => [

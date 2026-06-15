@@ -5,9 +5,11 @@ export type HostDataItem = {
 };
 
 export type HostData = HostDataItem[][];
+export type HostVisibleReviewIds = Set<string>;
 
-export function parseHostVisibleReviewIds(data: unknown): Set<string> | null {
-  if (!Array.isArray(data) || data.length < 2) {
+// null means unsupported host data shape; an empty Set means a supported but empty visible scope.
+export function parseHostVisibleReviewIds(data: unknown): HostVisibleReviewIds | null {
+  if (!Array.isArray(data) || data.length < 1) {
     return null;
   }
 

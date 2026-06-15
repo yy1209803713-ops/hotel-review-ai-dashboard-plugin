@@ -52,7 +52,7 @@ export function DashboardShell(props: {
         />
         <div className="content">
           {props.error ? <ErrorBanner message={props.error} /> : null}
-          {props.scopeWarning && props.scopeWarning !== props.error ? <WarningBanner message={props.scopeWarning} /> : null}
+          {props.scopeWarning ? <WarningBanner message={props.scopeWarning} /> : null}
           {props.stale ? <StaleBanner /> : null}
           {props.loading && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
           {props.loading && props.analysis ? <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact /> : null}
