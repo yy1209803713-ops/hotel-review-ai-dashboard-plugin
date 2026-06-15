@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
+import type { RecordsPage } from './services/baseRecords';
 import type { PluginConfig } from './types/config';
 
 const runtimeRef = vi.hoisted(() => ({
@@ -237,6 +238,46 @@ describe('App initialization', () => {
     expect(document.querySelector('option[value="fld_c_content"]')).toBeInTheDocument();
   });
 
+  it('ignores stale initial categories after the user switches tables', async () => {
+    const initialCategories = deferred<RuntimeCategory[]>();
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: 'table-a' }),
+      })),
+      getCategories: vi.fn((tableId: string) => {
+        if (tableId === 'table-a') {
+          return initialCategories.promise;
+        }
+        if (tableId === 'table-c') {
+          return Promise.resolve([{ fieldId: 'fld_c_content', fieldName: '评论内容', fieldType: 'text' }]);
+        }
+        return Promise.resolve([]);
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('表 A')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-c' } });
+    await waitFor(() => expect(screen.getByDisplayValue('表 C')).toBeInTheDocument());
+
+    await act(async () => {
+      initialCategories.resolve([{ fieldId: 'fld_a_content', fieldName: '评论内容', fieldType: 'text' }]);
+      await initialCategories.promise;
+    });
+
+    expect(screen.getByDisplayValue('表 C')).toBeInTheDocument();
+    expect(document.querySelector('option[value="fld_a_content"]')).not.toBeInTheDocument();
+    expect(document.querySelector('option[value="fld_c_content"]')).toBeInTheDocument();
+  });
+
   it('loads filter options when fields unrelated to options are missing', async () => {
     const runtime = fakeRuntime({
       getConfig: vi.fn(async () => ({
@@ -279,6 +320,105 @@ describe('App initialization', () => {
     await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText('昆明中维翠湖宾馆')).toBeInTheDocument());
     expect(screen.getByText('2026-05')).toBeInTheDocument();
+  });
+
+  it('ignores stale option records when an older table read finishes later', async () => {
+    const tableBPage = deferred<RecordsPage>();
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: 'table-a' }),
+      })),
+      getCategories: vi.fn(async (tableId: string) => {
+        if (tableId === 'table-b') {
+          return optionCategories('b');
+        }
+        if (tableId === 'table-c') {
+          return optionCategories('c');
+        }
+        return [];
+      }),
+      readRecordsPage: vi.fn((tableId: string) => {
+        if (tableId === 'table-b') {
+          return tableBPage.promise;
+        }
+        return Promise.resolve({
+          records: [optionRecord('c', '表 C 酒店', '2026-06-01 00:00:00')],
+          hasMore: false,
+        });
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('table-a'));
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledWith('table-b', expect.any(Object)));
+    fireEvent.change(screen.getByDisplayValue('表 B'), { target: { value: 'table-c' } });
+
+    await waitFor(() => expect(screen.getByText('表 C 酒店')).toBeInTheDocument());
+    await act(async () => {
+      tableBPage.resolve({
+        records: [optionRecord('b', '表 B 酒店', '2026-05-01 00:00:00')],
+        hasMore: false,
+      });
+      await tableBPage.promise;
+    });
+
+    expect(screen.getByText('表 C 酒店')).toBeInTheDocument();
+    expect(screen.queryByText('表 B 酒店')).not.toBeInTheDocument();
+  });
+
+  it('ignores stale category errors after a newer table selection succeeds', async () => {
+    const tableBError = deferred<RuntimeCategory[]>();
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: 'table-a' }),
+      })),
+      getCategories: vi.fn((tableId: string) => {
+        if (tableId === 'table-b') {
+          return tableBError.promise;
+        }
+        if (tableId === 'table-c') {
+          return Promise.resolve(optionCategories('c'));
+        }
+        return Promise.resolve([]);
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('c', '表 C 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('table-a'));
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+    fireEvent.change(screen.getByDisplayValue('表 B'), { target: { value: 'table-c' } });
+    await waitFor(() => expect(screen.getByDisplayValue('表 C')).toBeInTheDocument());
+
+    await act(async () => {
+      tableBError.reject(new Error('表 B 字段读取失败'));
+      await tableBError.promise.catch(() => undefined);
+    });
+
+    expect(screen.queryByText('表 B 字段读取失败')).not.toBeInTheDocument();
+    expect(screen.queryByText('读取字段配置失败')).not.toBeInTheDocument();
   });
 });
 
@@ -330,3 +470,32 @@ const aliasCategories: RuntimeCategory[] = [
   { fieldId: 'fld_reply', fieldName: '回复内容', fieldType: 'text' },
   { fieldId: 'fld_room', fieldName: 'room_type', fieldType: 'text' },
 ];
+
+function optionCategories(prefix: string): RuntimeCategory[] {
+  return [
+    { fieldId: `fld_${prefix}_content`, fieldName: '评论内容', fieldType: 'text' },
+    { fieldId: `fld_${prefix}_hotel`, fieldName: '酒店名称', fieldType: 'text' },
+    { fieldId: `fld_${prefix}_checkin`, fieldName: '入住月份', fieldType: 'text' },
+  ];
+}
+
+function optionRecord(prefix: string, hotelName: string, checkInMonth: string) {
+  return {
+    recordId: `rec-${prefix}`,
+    fields: {
+      [`fld_${prefix}_content`]: `${hotelName} 评论`,
+      [`fld_${prefix}_hotel`]: hotelName,
+      [`fld_${prefix}_checkin`]: checkInMonth,
+    },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

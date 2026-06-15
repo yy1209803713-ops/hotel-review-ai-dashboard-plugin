@@ -44,6 +44,7 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
+    let initSourceRequestId: number | null = null;
 
     async function init() {
       try {
@@ -65,8 +66,11 @@ export default function App() {
           return;
         }
 
+        const requestId = configSourceRequestId.current + 1;
+        configSourceRequestId.current = requestId;
+        initSourceRequestId = requestId;
         const categoryList = await runtime.getCategories(pluginConfig.source.tableId);
-        if (!mounted) {
+        if (!mounted || configSourceRequestId.current !== requestId) {
           return;
         }
         const runtimeCategories = categoryList as RuntimeCategory[];
@@ -75,15 +79,12 @@ export default function App() {
         setCategories(runtimeCategories);
 
         if (hasFilterOptionRequiredFields(configWithSuggestedFields.source.fields)) {
-          readRecordsForConfig(runtime, configWithSuggestedFields)
-            .then((records) => {
-              if (mounted) {
-                setOptionRecords(records);
-              }
-            })
-            .catch(() => undefined);
+          loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
         }
       } catch (cause) {
+        if (initSourceRequestId !== null && configSourceRequestId.current !== initSourceRequestId) {
+          return;
+        }
         setError(cause instanceof Error ? cause.message : '初始化失败');
       } finally {
         setLoading(false);
@@ -306,18 +307,25 @@ export default function App() {
     }
   }
 
-  async function loadFilterOptionRecords(pluginConfig: PluginConfig) {
+  async function loadFilterOptionRecords(pluginConfig: PluginConfig, requestId?: number) {
+    const isCurrentRequest = () => requestId === undefined || configSourceRequestId.current === requestId;
     if (!pluginConfig.source.tableId.trim()) {
-      setOptionRecords([]);
+      if (isCurrentRequest()) {
+        setOptionRecords([]);
+      }
       return;
     }
     if (!hasFilterOptionRequiredFields(pluginConfig.source.fields)) {
-      setOptionRecords([]);
+      if (isCurrentRequest()) {
+        setOptionRecords([]);
+      }
       return;
     }
 
     const records = await readRecordsForConfig(runtime, pluginConfig);
-    setOptionRecords(records);
+    if (isCurrentRequest()) {
+      setOptionRecords(records);
+    }
   }
 
   async function handleConfigChange(nextConfig: PluginConfig) {
@@ -346,8 +354,11 @@ export default function App() {
       const configWithSuggestedFields = withSuggestedFieldMapping(nextConfig, runtimeCategories);
       setConfig(configWithSuggestedFields);
       setCategories(runtimeCategories);
-      loadFilterOptionRecords(configWithSuggestedFields).catch(() => undefined);
+      loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
     } catch (cause) {
+      if (configSourceRequestId.current !== requestId) {
+        return;
+      }
       setError(cause instanceof Error ? cause.message : '读取字段配置失败');
     }
   }
