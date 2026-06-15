@@ -445,8 +445,12 @@ export default function App() {
   async function handleConfigChange(nextConfig: PluginConfig) {
     const previousTableId = config.source.tableId;
     const nextTableId = nextConfig.source.tableId;
+    const dataRangeChanged = !isSameDataRange(config.source.dataRange, nextConfig.source.dataRange);
     setConfig(nextConfig);
     if (nextTableId === previousTableId) {
+      if (dataRangeChanged && isConfigMode) {
+        setHostData(await runtime.getPreviewData(buildDataConditions(nextConfig)));
+      }
       return;
     }
     setError(null);
@@ -662,6 +666,10 @@ function getSaveValidationMessage(config: PluginConfig): string | null {
 
 function getViewIdFromDataRange(dataRange?: IDataRange): string | undefined {
   return dataRange?.type === 'VIEW' ? dataRange.viewId : undefined;
+}
+
+function isSameDataRange(left?: IDataRange, right?: IDataRange): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {

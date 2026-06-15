@@ -187,6 +187,50 @@ describe('App initialization', () => {
     expect(runtime.getData).not.toHaveBeenCalled();
   });
 
+  it('refreshes preview data when the data range changes on the same table', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableList: vi.fn(async () => [{ tableId: 'table-a', tableName: '表 A' }]),
+      getTableDataRange: vi.fn(async () => [
+        { type: SourceType.ALL },
+        viewDataRange('view-a', '表 A 视图'),
+      ]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getPreviewData).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.getPreviewData).mockClear();
+
+    fireEvent.change(screen.getByDisplayValue('全部数据'), { target: { value: 'VIEW:view-a' } });
+
+    await waitFor(() =>
+      expect(runtime.getPreviewData).toHaveBeenCalledWith([
+        {
+          tableId: 'table-a',
+          dataRange: { type: SourceType.VIEW, viewId: 'view-a', viewName: '表 A 视图' },
+          groups: [{ fieldId: 'fld_a_review_id' }],
+          series: 'COUNTA',
+        },
+      ]),
+    );
+  });
+
   it('loads host data in View state and hides the config panel', async () => {
     const runtime = fakeRuntime({
       getState: () => 'View',
