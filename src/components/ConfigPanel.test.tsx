@@ -6,7 +6,7 @@ import type { PluginConfig } from '../types/config';
 import { ConfigPanel } from './ConfigPanel';
 
 vi.mock('@douyinfe/semi-ui', () => ({
-  Banner: () => null,
+  Banner: (props: { description?: React.ReactNode }) => <div role="alert">{props.description}</div>,
   Button: (props: { children: React.ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={props.onClick}>
       {props.children}
@@ -65,6 +65,7 @@ describe('ConfigPanel', () => {
           { tableId: 'new-table', tableName: '新数据表' },
         ]}
         categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
         saving={false}
         testingConnection={false}
         onChange={onChange}
@@ -85,5 +86,77 @@ describe('ConfigPanel', () => {
         fields: DEFAULT_CONFIG.source.fields,
       },
     });
+  });
+
+  it('emits data range and view id updates when selecting a view range', () => {
+    const onChange = vi.fn();
+    const config: PluginConfig = {
+      ...DEFAULT_CONFIG,
+      source: {
+        ...DEFAULT_CONFIG.source,
+        tableId: 'table-1',
+        dataRange: { type: SourceType.ALL },
+      },
+    };
+
+    render(
+      <ConfigPanel
+        config={config}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[
+          { type: SourceType.ALL },
+          { type: SourceType.VIEW, viewId: 'view-a', viewName: '有效评论' },
+        ]}
+        saving={false}
+        testingConnection={false}
+        onChange={onChange}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByDisplayValue('全部数据'), { target: { value: 'VIEW:view-a' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...config,
+      source: {
+        ...config.source,
+        dataRange: { type: SourceType.VIEW, viewId: 'view-a', viewName: '有效评论' },
+        viewId: 'view-a',
+      },
+    });
+  });
+
+  it('shows a missing field mapping list', () => {
+    const config: PluginConfig = {
+      ...DEFAULT_CONFIG,
+      source: {
+        ...DEFAULT_CONFIG.source,
+        tableId: 'table-1',
+        fields: {
+          ...DEFAULT_CONFIG.source.fields,
+          reviewId: 'fld_id',
+          content: 'fld_content',
+          hotelName: 'fld_hotel',
+        },
+      },
+    };
+
+    render(
+      <ConfigPanel
+        config={config}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
+        saving={false}
+        testingConnection={false}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('缺少字段映射：评分、评论日期、入住日期、回复内容、房型')).toBeInTheDocument();
   });
 });

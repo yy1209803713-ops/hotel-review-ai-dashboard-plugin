@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@douyinfe/semi-ui';
+import { type IDataRange } from '@lark-base-open/js-sdk';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DashboardShell } from './components/DashboardShell';
 import { DEFAULT_CONFIG, FIELD_LABELS } from './constants/defaults';
+import { buildDataConditions } from './services/dashboardConfig';
 import { getPeriodRange } from './services/filtering';
 import { normalizeReviewRecord, readReviewRecords } from './services/baseRecords';
 import { filterReviews } from './services/filtering';
@@ -31,12 +33,14 @@ export default function App() {
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [tables, setTables] = useState<RuntimeTable[]>([]);
   const [categories, setCategories] = useState<RuntimeCategory[]>([]);
+  const [dataRanges, setDataRanges] = useState<IDataRange[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentScope, setCurrentScope] = useState<ScopeSnapshot | null>(null);
   const [optionRecords, setOptionRecords] = useState<ReviewRecord[]>([]);
+  const [hostData, setHostData] = useState<unknown[][] | null>(null);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
 
@@ -44,51 +48,143 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-    let initSourceRequestId: number | null = null;
 
     async function init() {
+      setLoading(true);
+      setError(null);
+      setSelectedTopic(null);
+      setEvidenceRecords([]);
+      setEvidencePage(1);
+      setEvidenceLoading(false);
+      setOptionRecords([]);
+      setCategories([]);
+      setDataRanges([]);
+      setHostData(null);
+
       try {
-        const pluginConfig = await loadPluginConfig(runtime);
-        if (!mounted) {
+        if (state === 'View' || state === 'FullScreen') {
+          await initializeDisplayState();
           return;
         }
-        setConfig(pluginConfig);
-        setFilters(withComputedRange(pluginConfig.filters));
-        setAnalysis(pluginConfig.analysisCache?.result ?? null);
+
         const tableList = await runtime.getTableList();
         if (!mounted) {
           return;
         }
         setTables(tableList);
-        if (!pluginConfig.source.tableId.trim()) {
-          setCategories([]);
-          setOptionRecords([]);
+
+        if (state === 'Create') {
+          await initializeCreateState(tableList);
           return;
         }
 
-        const requestId = configSourceRequestId.current + 1;
-        configSourceRequestId.current = requestId;
-        initSourceRequestId = requestId;
-        const categoryList = await runtime.getCategories(pluginConfig.source.tableId);
+        await initializeConfigState();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : '初始化失败');
+      } finally {
+        if (mounted) {
+          setLoading(false);
+          runtime.setRendered();
+        }
+      }
+    }
+
+    async function initializeCreateState(tableList: RuntimeTable[]) {
+      const firstTable = tableList[0];
+      if (!firstTable) {
+        setConfig(DEFAULT_CONFIG);
+        setAnalysis(null);
+        return;
+      }
+
+      const requestId = configSourceRequestId.current + 1;
+      configSourceRequestId.current = requestId;
+      const draftConfig: PluginConfig = {
+        ...DEFAULT_CONFIG,
+        source: {
+          ...DEFAULT_CONFIG.source,
+          tableId: firstTable.tableId,
+          viewId: undefined,
+          dataRange: undefined,
+          fields: { ...DEFAULT_CONFIG.source.fields },
+        },
+      };
+      await loadSourceMetadata(draftConfig, requestId, true);
+    }
+
+    async function initializeConfigState() {
+      const pluginConfig = await loadPluginConfig(runtime);
+      if (!mounted) {
+        return;
+      }
+      setConfig(pluginConfig);
+      setFilters(withComputedRange(pluginConfig.filters));
+      setAnalysis(pluginConfig.analysisCache?.result ?? null);
+      if (!pluginConfig.source.tableId.trim()) {
+        setHostData(await runtime.getPreviewData(buildDataConditions(pluginConfig)));
+        return;
+      }
+
+      const requestId = configSourceRequestId.current + 1;
+      configSourceRequestId.current = requestId;
+      await loadSourceMetadata(pluginConfig, requestId, true);
+    }
+
+    async function initializeDisplayState() {
+      const pluginConfig = await loadPluginConfig(runtime);
+      if (!mounted) {
+        return;
+      }
+      setConfig(pluginConfig);
+      setFilters(withComputedRange(pluginConfig.filters));
+      setAnalysis(pluginConfig.analysisCache?.result ?? null);
+      setDataRanges([]);
+      setCategories([]);
+      setHostData(await runtime.getData());
+      if (pluginConfig.source.tableId.trim()) {
+        await loadFilterOptionRecords(pluginConfig);
+      }
+    }
+
+    async function loadSourceMetadata(pluginConfig: PluginConfig, requestId: number, loadPreview: boolean) {
+      const tableId = pluginConfig.source.tableId.trim();
+      if (!tableId) {
+        return;
+      }
+
+      const [categoryList, dataRangeList] = await Promise.all([
+        runtime.getCategories(tableId),
+        runtime.getTableDataRange(tableId),
+      ]);
+      if (!mounted || configSourceRequestId.current !== requestId) {
+        return;
+      }
+
+      const runtimeCategories = categoryList as RuntimeCategory[];
+      const configWithSuggestedFields = withSuggestedFieldMapping(
+        {
+          ...pluginConfig,
+          source: {
+            ...pluginConfig.source,
+            dataRange: pluginConfig.source.dataRange ?? (dataRangeList[0] as IDataRange | undefined),
+          },
+        },
+        runtimeCategories,
+      );
+      setConfig(configWithSuggestedFields);
+      setCategories(runtimeCategories);
+      setDataRanges(dataRangeList as IDataRange[]);
+
+      if (loadPreview) {
+        const previewData = await runtime.getPreviewData(buildDataConditions(configWithSuggestedFields));
         if (!mounted || configSourceRequestId.current !== requestId) {
           return;
         }
-        const runtimeCategories = categoryList as RuntimeCategory[];
-        const configWithSuggestedFields = withSuggestedFieldMapping(pluginConfig, runtimeCategories);
-        setConfig(configWithSuggestedFields);
-        setCategories(runtimeCategories);
+        setHostData(previewData);
+      }
 
-        if (hasFilterOptionRequiredFields(configWithSuggestedFields.source.fields)) {
-          loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
-        }
-      } catch (cause) {
-        if (initSourceRequestId !== null && configSourceRequestId.current !== initSourceRequestId) {
-          return;
-        }
-        setError(cause instanceof Error ? cause.message : '初始化失败');
-      } finally {
-        setLoading(false);
-        runtime.setRendered();
+      if (hasFilterOptionRequiredFields(configWithSuggestedFields.source.fields)) {
+        await loadFilterOptionRecords(configWithSuggestedFields, requestId);
       }
     }
 
@@ -96,7 +192,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [state]);
 
   const stale = useMemo(() => {
     const cacheScope = config.analysisCache?.scopeSnapshot as ScopeSnapshot | undefined;
@@ -127,6 +223,13 @@ export default function App() {
     if (missingFieldMessage) {
       setError(missingFieldMessage);
       Toast.error(missingFieldMessage);
+      return;
+    }
+
+    if (!config.ai.apiKey.trim()) {
+      const message = '请先填写 API Key';
+      setError(message);
+      Toast.error(message);
       return;
     }
 
@@ -215,6 +318,13 @@ export default function App() {
   }
 
   async function handleTestConnection() {
+    if (!config.ai.apiKey.trim()) {
+      const message = '请先填写 API Key';
+      setError(message);
+      Toast.error(message);
+      return;
+    }
+
     setTestingConnection(true);
     try {
       const result = await testAiConnection({ config: config.ai });
@@ -288,10 +398,10 @@ export default function App() {
 
   async function handleSaveConfig() {
     setError(null);
-    const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
-    if (missingFieldMessage) {
-      setError(missingFieldMessage);
-      Toast.error(missingFieldMessage);
+    const saveValidationMessage = getSaveValidationMessage(config);
+    if (saveValidationMessage) {
+      setError(saveValidationMessage);
+      Toast.error(saveValidationMessage);
       return;
     }
 
@@ -303,7 +413,9 @@ export default function App() {
       loadFilterOptionRecords(configToSave, sourceRequestId).catch(() => undefined);
       Toast.success('配置已保存');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : '保存配置失败');
+      const message = cause instanceof Error ? cause.message : '保存配置失败';
+      setError(message);
+      Toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -423,6 +535,7 @@ export default function App() {
         config={config}
         tables={tables}
         categories={categories}
+        dataRanges={dataRanges}
         saving={saving}
         testingConnection={testingConnection}
         onChange={handleConfigChange}
@@ -503,6 +616,27 @@ function getMissingFieldMappingMessage(fields: FieldMapping): string | null {
   }
 
   return `请先完成字段映射：${missingFields.map((key) => FIELD_LABELS[key]).join('、')}`;
+}
+
+function getSaveValidationMessage(config: PluginConfig): string | null {
+  if (!config.source.tableId.trim()) {
+    return '请先选择数据表';
+  }
+
+  const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
+  if (missingFieldMessage) {
+    return missingFieldMessage;
+  }
+
+  if (!config.ai.apiBaseUrl.trim()) {
+    return '请先填写 API Base URL';
+  }
+
+  if (!config.ai.model.trim()) {
+    return '请先填写 Model';
+  }
+
+  return null;
 }
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {

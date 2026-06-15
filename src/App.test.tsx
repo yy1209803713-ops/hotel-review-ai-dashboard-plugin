@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { SourceType } from '@lark-base-open/js-sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
@@ -25,8 +26,15 @@ vi.mock('@douyinfe/semi-ui', () => ({
       {props.children}
     </button>
   ),
-  Input: (props: { value?: string; placeholder?: string; onChange?: (value: string) => void }) => (
+  Input: (props: {
+    name?: string;
+    value?: string;
+    placeholder?: string;
+    onChange?: (value: string) => void;
+  }) => (
     <input
+      aria-label={props.name}
+      name={props.name}
       placeholder={props.placeholder}
       value={props.value ?? ''}
       onChange={(event) => props.onChange?.(event.target.value)}
@@ -86,6 +94,7 @@ vi.mock('lottie-web', () => ({
 }));
 
 const { default: App } = await import('./App');
+const { Toast } = await import('@douyinfe/semi-ui');
 
 describe('App initialization', () => {
   beforeEach(() => {
@@ -97,27 +106,108 @@ describe('App initialization', () => {
     document.body.innerHTML = '';
   });
 
-  it('loads table list without calling table-bound SDK methods before a table is selected', async () => {
+  it('initializes Create state from the first table without calling saved Dashboard config', async () => {
     const runtime = fakeRuntime({
-      getCategories: vi.fn(async () => {
-        throw new Error('empty tableId rejected');
+      getState: () => 'Create',
+      getConfig: vi.fn(async () => {
+        throw new Error('Create state must not call getConfig');
       }),
-      readRecordsPage: vi.fn(async () => {
-        throw new Error('readRecordsPage should not run without tableId');
-      }),
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '第一张表' },
+        { tableId: 'table-b', tableName: '第二张表' },
+      ]),
+      getTableDataRange: vi.fn(async () => [
+        { type: SourceType.ALL },
+        { type: SourceType.VIEW, viewId: 'view-a', viewName: '有效评论视图' },
+      ]),
+      getCategories: vi.fn(async () => aliasCategories),
     });
 
     runtimeRef.current = runtime;
 
     render(<App />);
 
-    await waitFor(() => expect(runtime.getTableList).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(runtime.setRendered).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByDisplayValue('第一张表')).toBeInTheDocument());
 
-    expect(runtime.getCategories).not.toHaveBeenCalled();
-    expect(runtime.readRecordsPage).not.toHaveBeenCalled();
+    expect(runtime.getConfig).not.toHaveBeenCalled();
+    expect(runtime.getTableDataRange).toHaveBeenCalledWith('table-a');
+    expect(runtime.getCategories).toHaveBeenCalledWith('table-a');
+    expect(runtime.getPreviewData).toHaveBeenCalledWith([
+      {
+        tableId: 'table-a',
+        dataRange: { type: SourceType.ALL },
+        groups: [{ fieldId: 'fld_id' }],
+        series: 'COUNTA',
+      },
+    ]);
     expect(screen.getByText('插件配置')).toBeInTheDocument();
-    expect(screen.queryByText('empty tableId rejected')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument();
+  });
+
+  it('loads preview data from saved Dashboard config in Config state', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [
+          {
+            tableId: 'tbl1',
+            dataRange: viewDataRange('view-a', '有效评论'),
+            groups: [{ fieldId: 'fld_id' }],
+            series: 'COUNTA' as const,
+          },
+        ],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          viewId: 'view-a',
+          dataRange: viewDataRange('view-a', '有效评论'),
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn(async () => [
+        { type: SourceType.ALL },
+        viewDataRange('view-a', '有效评论'),
+      ]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getPreviewData).toHaveBeenCalledTimes(1));
+
+    expect(runtime.getPreviewData).toHaveBeenCalledWith([
+      {
+        tableId: 'tbl1',
+        dataRange: { type: SourceType.VIEW, viewId: 'view-a', viewName: '有效评论' },
+        groups: [{ fieldId: 'fld_a_review_id' }],
+        series: 'COUNTA',
+      },
+    ]);
+    expect(runtime.getData).not.toHaveBeenCalled();
+  });
+
+  it('loads host data in View state and hides the config panel', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [[{ value: '1001', text: '1001', groupKey: '1001' }]]),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+
+    expect(runtime.getPreviewData).not.toHaveBeenCalled();
+    expect(screen.queryByText('插件配置')).not.toBeInTheDocument();
   });
 
   it('prefills missing field mapping from loaded table categories before saving', async () => {
@@ -175,6 +265,119 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getAllByText(/请先完成字段映射/).length).toBeGreaterThan(0));
     expect(runtime.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving when no source table is selected', async () => {
+    const runtime = fakeRuntime({
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: '',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getTableList).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText('保存配置'));
+
+    await waitFor(() => expect(screen.getAllByText('请先选择数据表').length).toBeGreaterThan(0));
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving when API Base URL or model is blank but allows an empty API key', async () => {
+    const runtime = fakeRuntime({
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('tbl1'));
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-api-base-url'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => expect(screen.getAllByText('请先填写 API Base URL').length).toBeGreaterThan(0));
+    expect(runtime.saveConfig).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-api-base-url'), {
+      target: { value: DEFAULT_CONFIG.ai.apiBaseUrl },
+    });
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-model'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => expect(screen.getAllByText('请先填写 Model').length).toBeGreaterThan(0));
+    expect(runtime.saveConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the real Dashboard save error when saving fails', async () => {
+    const runtime = fakeRuntime({
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      saveConfig: vi.fn(async () => {
+        throw new Error('host save exploded');
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('tbl1'));
+    fireEvent.click(screen.getByText('保存配置'));
+
+    await waitFor(() => expect(screen.getAllByText('host save exploded').length).toBeGreaterThan(0));
+    expect(Toast.error).toHaveBeenCalledWith('host save exploded');
+  });
+
+  it('blocks connection test and analysis when API key is blank', async () => {
+    const runtime = fakeRuntime({
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('tbl1'));
+    vi.mocked(runtime.readRecordsPage).mockClear();
+
+    fireEvent.click(screen.getByText('测试连接'));
+    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith('请先填写 API Key'));
+
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+    await waitFor(() => expect(screen.getAllByText('请先填写 API Key').length).toBeGreaterThan(0));
+    expect(runtime.readRecordsPage).not.toHaveBeenCalled();
   });
 
   it('blocks analysis when required field mapping is missing', async () => {
@@ -531,7 +734,7 @@ describe('App initialization', () => {
 function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntime {
   return {
     isFixture: false,
-    getState: () => 'Create',
+    getState: () => 'Config',
     getTheme: vi.fn(),
     onThemeChange: vi.fn(() => () => undefined),
     getConfig: vi.fn(async () => ({ dataConditions: [], customConfig: DEFAULT_CONFIG })),
@@ -542,7 +745,7 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
     onConfigChange: vi.fn(() => () => undefined),
     getTableList: vi.fn(async () => [{ tableId: 'tbl1', tableName: '酒店评论' }]),
     getFieldMetaList: vi.fn(),
-    getTableDataRange: vi.fn(),
+    getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }]),
     getCategories: vi.fn(async () => []),
     readRecordsPage: vi.fn(),
     readRecordsByIds: vi.fn(),
@@ -621,6 +824,10 @@ function optionFieldMapping(prefix: string): PluginConfig['source']['fields'] {
     replyContent: `fld_${prefix}_reply`,
     roomType: `fld_${prefix}_room`,
   };
+}
+
+function viewDataRange(viewId: string, viewName: string) {
+  return { type: SourceType.VIEW, viewId, viewName } as const;
 }
 
 function deferred<T>() {
