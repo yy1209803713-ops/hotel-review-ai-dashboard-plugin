@@ -38,11 +38,6 @@ export function ConfigPanel(props: {
           <div className="config-section-head">
             <h3>数据源</h3>
           </div>
-          <Banner
-            type="warning"
-            closeIcon={null}
-            description="API Key 直连仅适合自用阶段；公开上架前需要迁移到后端代理。"
-          />
           <Field label="数据表">
             <ConfigSelect
               value={props.config.source.tableId}
@@ -98,6 +93,11 @@ export function ConfigPanel(props: {
           <div className="config-section-head">
             <h3>AI API</h3>
           </div>
+          <Banner
+            type="warning"
+            closeIcon={null}
+            description="API Key 直连仅适合自用阶段；公开上架前需要迁移到后端代理。"
+          />
           <Field label="API Base URL">
             <Input
               name="hotel-review-ai-api-base-url"

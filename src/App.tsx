@@ -62,6 +62,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const previousThemeMode = document.documentElement.getAttribute('theme-mode');
     document.documentElement.classList.toggle('full-screen', state === 'FullScreen');
     runtime.getTheme().then((theme) => {
       if (mountedRef.current) {
@@ -101,6 +102,11 @@ export default function App() {
 
     return () => {
       document.documentElement.classList.remove('full-screen');
+      if (previousThemeMode === null) {
+        document.documentElement.removeAttribute('theme-mode');
+      } else {
+        document.documentElement.setAttribute('theme-mode', previousThemeMode);
+      }
       unsubscribeTheme();
       unsubscribeData();
       unsubscribeConfig();
