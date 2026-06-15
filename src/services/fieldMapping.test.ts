@@ -27,6 +27,20 @@ describe('suggestFieldMapping', () => {
     });
   });
 
+  it('does not infer review ID from generic id fields', () => {
+    expect(suggestFieldMapping([{ fieldId: 'fld_hotel_id', fieldName: '酒店ID', fieldType: 'text' }]).reviewId).toBe('');
+    expect(suggestFieldMapping([{ fieldId: 'fld_id', fieldName: 'id', fieldType: 'text' }]).reviewId).toBe('');
+  });
+
+  it('still infers review ID from explicit review aliases', () => {
+    expect(suggestFieldMapping([{ fieldId: 'fld_review_id_cn', fieldName: '评论ID', fieldType: 'text' }]).reviewId).toBe(
+      'fld_review_id_cn',
+    );
+    expect(suggestFieldMapping([{ fieldId: 'fld_review_id_en', fieldName: 'review_id', fieldType: 'text' }]).reviewId).toBe(
+      'fld_review_id_en',
+    );
+  });
+
   it('reports missing required fields by key', () => {
     const missing = getMissingRequiredFields({
       reviewId: 'fld_id',

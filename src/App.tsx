@@ -17,6 +17,7 @@ import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
 
 const EVIDENCE_PAGE_SIZE = 10;
+const FILTER_OPTION_REQUIRED_FIELD_KEYS: Array<keyof FieldMapping> = ['content', 'hotelName', 'checkInMonth'];
 
 export default function App() {
   const runtime = defaultRuntime;
@@ -37,6 +38,7 @@ export default function App() {
   const [currentScope, setCurrentScope] = useState<ScopeSnapshot | null>(null);
   const [optionRecords, setOptionRecords] = useState<ReviewRecord[]>([]);
   const evidenceRequestId = useRef(0);
+  const configSourceRequestId = useRef(0);
 
   const isConfigMode = state === 'Create' || state === 'Config';
 
@@ -71,18 +73,16 @@ export default function App() {
         const configWithSuggestedFields = withSuggestedFieldMapping(pluginConfig, runtimeCategories);
         setConfig(configWithSuggestedFields);
         setCategories(runtimeCategories);
-        if (getMissingRequiredFields(configWithSuggestedFields.source.fields).length) {
-          setOptionRecords([]);
-          return;
-        }
 
-        readRecordsForConfig(runtime, configWithSuggestedFields)
-          .then((records) => {
-            if (mounted) {
-              setOptionRecords(records);
-            }
-          })
-          .catch(() => undefined);
+        if (hasFilterOptionRequiredFields(configWithSuggestedFields.source.fields)) {
+          readRecordsForConfig(runtime, configWithSuggestedFields)
+            .then((records) => {
+              if (mounted) {
+                setOptionRecords(records);
+              }
+            })
+            .catch(() => undefined);
+        }
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : '初始化失败');
       } finally {
@@ -311,7 +311,7 @@ export default function App() {
       setOptionRecords([]);
       return;
     }
-    if (getMissingRequiredFields(pluginConfig.source.fields).length) {
+    if (!hasFilterOptionRequiredFields(pluginConfig.source.fields)) {
       setOptionRecords([]);
       return;
     }
@@ -329,13 +329,19 @@ export default function App() {
     }
 
     if (!nextTableId.trim()) {
+      configSourceRequestId.current += 1;
       setCategories([]);
       setOptionRecords([]);
       return;
     }
 
+    const requestId = configSourceRequestId.current + 1;
+    configSourceRequestId.current = requestId;
     try {
       const categoryList = await runtime.getCategories(nextTableId);
+      if (configSourceRequestId.current !== requestId) {
+        return;
+      }
       const runtimeCategories = categoryList as RuntimeCategory[];
       const configWithSuggestedFields = withSuggestedFieldMapping(nextConfig, runtimeCategories);
       setConfig(configWithSuggestedFields);
@@ -483,6 +489,10 @@ function getMissingFieldMappingMessage(fields: FieldMapping): string | null {
   }
 
   return `请先完成字段映射：${missingFields.map((key) => FIELD_LABELS[key]).join('、')}`;
+}
+
+function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {
+  return FILTER_OPTION_REQUIRED_FIELD_KEYS.every((key) => fields[key]?.trim());
 }
 
 type AnalysisTimingStatus = 'success' | 'error' | 'skipped';

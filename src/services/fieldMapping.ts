@@ -3,7 +3,7 @@ import type { FieldMapping } from '../types/config';
 import type { RuntimeCategory } from '../runtime/sdk';
 
 const FIELD_ALIASES: Record<keyof FieldMapping, string[]> = {
-  reviewId: ['评论id', '评论ID', '评论 ID', 'reviewId', 'review_id', 'id'],
+  reviewId: ['评论id', '评论ID', '评论 ID', 'reviewId', 'review_id'],
   content: ['评论内容', '内容', 'comment', 'content', 'review'],
   hotelName: ['酒店名称', '酒店', 'hotelName', 'hotel_name', 'hotel'],
   score: ['评分', 'score', 'rating'],

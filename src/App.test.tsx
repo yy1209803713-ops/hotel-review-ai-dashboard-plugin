@@ -17,6 +17,63 @@ vi.mock('./runtime/sdk', () => ({
   ),
 }));
 
+vi.mock('@douyinfe/semi-ui', () => ({
+  Banner: (props: { description?: React.ReactNode }) => <div role="alert">{props.description}</div>,
+  Button: (props: { children: React.ReactNode; loading?: boolean; onClick?: () => void }) => (
+    <button type="button" disabled={props.loading} onClick={props.onClick}>
+      {props.children}
+    </button>
+  ),
+  Input: (props: { value?: string; placeholder?: string; onChange?: (value: string) => void }) => (
+    <input
+      placeholder={props.placeholder}
+      value={props.value ?? ''}
+      onChange={(event) => props.onChange?.(event.target.value)}
+    />
+  ),
+  InputNumber: (props: {
+    value?: number | null;
+    placeholder?: string;
+    onChange?: (value: number | null) => void;
+  }) => (
+    <input
+      type="number"
+      placeholder={props.placeholder}
+      value={props.value ?? ''}
+      onChange={(event) => props.onChange?.(event.target.value === '' ? null : Number(event.target.value))}
+    />
+  ),
+  Modal: (props: { visible?: boolean; children?: React.ReactNode }) => (props.visible ? <div>{props.children}</div> : null),
+  Pagination: () => null,
+  Select: (props: {
+    value?: string;
+    optionList: Array<{ label: string; value: string }>;
+    onChange?: (value: string) => void;
+  }) => (
+    <select value={props.value} onChange={(event) => props.onChange?.(event.target.value)}>
+      {props.optionList.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+  Spin: () => <div>loading</div>,
+  Switch: (props: { checked?: boolean; onChange?: (checked: boolean) => void }) => (
+    <input
+      type="checkbox"
+      checked={props.checked ?? false}
+      onChange={(event) => props.onChange?.(event.target.checked)}
+    />
+  ),
+  Toast: {
+    error: vi.fn(),
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
 vi.mock('lottie-web', () => ({
   default: {
     loadAnimation: vi.fn(() => ({
@@ -138,6 +195,90 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getAllByText(/请先完成字段映射/).length).toBeGreaterThan(0));
     expect(runtime.readRecordsPage).not.toHaveBeenCalled();
+  });
+
+  it('keeps the latest selected table when category requests resolve out of order', async () => {
+    const runtime = fakeRuntime({
+      getTableList: vi.fn(async () => [
+        { tableId: 'table-a', tableName: '表 A' },
+        { tableId: 'table-b', tableName: '表 B' },
+        { tableId: 'table-c', tableName: '表 C' },
+      ]),
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({ tableId: 'table-a' }),
+      })),
+      getCategories: vi.fn((tableId: string) => {
+        if (tableId === 'table-b') {
+          return new Promise<RuntimeCategory[]>((resolve) => {
+            setTimeout(() => resolve([{ fieldId: 'fld_b_content', fieldName: '评论内容', fieldType: 'text' }]), 20);
+          });
+        }
+        if (tableId === 'table-c') {
+          return Promise.resolve([{ fieldId: 'fld_c_content', fieldName: '评论内容', fieldType: 'text' }]);
+        }
+        return Promise.resolve([]);
+      }),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('table-a'));
+    fireEvent.change(screen.getByDisplayValue('表 A'), { target: { value: 'table-b' } });
+    fireEvent.change(screen.getByDisplayValue('表 B'), { target: { value: 'table-c' } });
+
+    await waitFor(() => expect(screen.getByDisplayValue('表 C')).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(screen.getByDisplayValue('表 C')).toBeInTheDocument();
+    expect(document.querySelector('option[value="fld_b_content"]')).not.toBeInTheDocument();
+    expect(document.querySelector('option[value="fld_c_content"]')).toBeInTheDocument();
+  });
+
+  it('loads filter options when fields unrelated to options are missing', async () => {
+    const runtime = fakeRuntime({
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: {
+            reviewId: 'fld_id',
+            content: 'fld_content',
+            hotelName: 'fld_hotel',
+            score: '',
+            reviewDate: '',
+            checkInMonth: 'fld_checkin',
+            replyContent: '',
+            roomType: '',
+          },
+        }),
+      })),
+      getCategories: vi.fn(async () => []),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          {
+            recordId: 'rec1',
+            fields: {
+              fld_id: '1001',
+              fld_content: '位置很好',
+              fld_hotel: '昆明中维翠湖宾馆',
+              fld_checkin: '2026-05-01 00:00:00',
+            },
+          },
+        ],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('昆明中维翠湖宾馆')).toBeInTheDocument());
+    expect(screen.getByText('2026-05')).toBeInTheDocument();
   });
 });
 
