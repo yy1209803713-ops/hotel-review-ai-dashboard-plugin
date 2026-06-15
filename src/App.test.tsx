@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { SourceType } from '@lark-base-open/js-sdk';
+import { SourceType, type IDataCondition } from '@lark-base-open/js-sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
@@ -187,6 +187,59 @@ describe('App initialization', () => {
     expect(runtime.getData).not.toHaveBeenCalled();
   });
 
+  it('normalizes a stale saved view before save so persisted config matches the visible data range', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [
+          {
+            tableId: 'tbl1',
+            dataRange: viewDataRange('view-stale', '旧视图'),
+            groups: [{ fieldId: 'fld_a_review_id' }],
+            series: 'COUNTA' as const,
+          },
+        ],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          viewId: 'view-stale',
+          dataRange: viewDataRange('view-stale', '旧视图'),
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }, viewDataRange('view-a', '有效评论')]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('保存配置'));
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataConditions: [
+          expect.objectContaining({
+            tableId: 'tbl1',
+            dataRange: { type: SourceType.ALL },
+          }),
+        ],
+        customConfig: expect.objectContaining({
+          source: expect.objectContaining({
+            dataRange: { type: SourceType.ALL },
+            viewId: undefined,
+          }),
+        }),
+      }),
+    );
+  });
+
   it('refreshes preview data when the data range changes on the same table', async () => {
     const runtime = fakeRuntime({
       getState: () => 'Config',
@@ -231,6 +284,80 @@ describe('App initialization', () => {
     );
   });
 
+  it('keeps the latest same-table preview when data range switches resolve out of order', async () => {
+    const viewAPreview = deferred<unknown[][]>();
+    const viewBPreview = deferred<unknown[][]>();
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableList: vi.fn(async () => [{ tableId: 'table-a', tableName: '表 A' }]),
+      getTableDataRange: vi.fn(async () => [
+        { type: SourceType.ALL },
+        viewDataRange('view-a', '表 A 视图 A'),
+        viewDataRange('view-b', '表 A 视图 B'),
+      ]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      getPreviewData: vi.fn((conditions: IDataCondition[]) => {
+        const dataRange = conditions[0]?.dataRange as { type: SourceType; viewId?: string } | undefined;
+        if (dataRange?.type === SourceType.VIEW && dataRange.viewId === 'view-a') {
+          return viewAPreview.promise;
+        }
+        if (dataRange?.type === SourceType.VIEW && dataRange.viewId === 'view-b') {
+          return viewBPreview.promise;
+        }
+        return Promise.resolve([[{ value: 'ALL' }]]);
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('全部数据'), { target: { value: 'VIEW:view-a' } });
+    fireEvent.change(screen.getByDisplayValue('表 A 视图 A'), { target: { value: 'VIEW:view-b' } });
+
+    await act(async () => {
+      viewBPreview.resolve([[{ value: 'VIEW_B' }]]);
+      await viewBPreview.promise;
+    });
+
+    await act(async () => {
+      viewAPreview.resolve([[{ value: 'VIEW_A' }]]);
+      await viewAPreview.promise;
+    });
+
+    fireEvent.click(screen.getByText('保存配置'));
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        dataConditions: [
+          expect.objectContaining({
+            dataRange: viewDataRange('view-b', '表 A 视图 B'),
+          }),
+        ],
+        customConfig: expect.objectContaining({
+          source: expect.objectContaining({
+            dataRange: viewDataRange('view-b', '表 A 视图 B'),
+            viewId: 'view-b',
+          }),
+        }),
+      }),
+    );
+  });
+
   it('refreshes preview data when a field mapping changes on the same table', async () => {
     const runtime = fakeRuntime({
       getState: () => 'Config',
@@ -270,6 +397,91 @@ describe('App initialization', () => {
         },
       ]),
     );
+  });
+
+  it('refreshes option records when same-table data range changes', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableList: vi.fn(async () => [{ tableId: 'table-a', tableName: '表 A' }]),
+      getTableDataRange: vi.fn(async () => [
+        { type: SourceType.ALL },
+        viewDataRange('view-a', '表 A 视图'),
+      ]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async (_tableId, params) => ({
+        records:
+          params.viewId === 'view-a'
+            ? [optionRecord('a', '视图酒店', '2026-06-01 00:00:00')]
+            : [optionRecord('a', '全部数据酒店', '2026-05-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('全部数据酒店')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('全部数据'), { target: { value: 'VIEW:view-a' } });
+
+    await waitFor(() => expect(screen.getByText('视图酒店')).toBeInTheDocument());
+    expect(screen.queryByText('全部数据酒店')).not.toBeInTheDocument();
+  });
+
+  it('refreshes option records when same-table reviewId mapping changes', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableList: vi.fn(async () => [{ tableId: 'table-a', tableName: '表 A' }]),
+      getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }]),
+      getCategories: vi.fn(async () => [
+        ...optionCategories('a'),
+        { fieldId: 'fld_a_review_id_alt', fieldName: '评论ID备份', fieldType: 'text' },
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          {
+            recordId: 'rec-a',
+            fields: {
+              fld_a_review_id_alt: 'review-alt',
+              fld_a_content: '新映射评论',
+              fld_a_hotel: '新映射酒店',
+              fld_a_score: 5,
+              fld_a_review_date: '2026-06-01 00:00:00',
+              fld_a_checkin: '2026-06-01 00:00:00',
+              fld_a_reply: '',
+              fld_a_room: '大床房',
+            },
+          },
+        ],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('新映射酒店')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('评论ID'), { target: { value: 'fld_a_review_id_alt' } });
+
+    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenLastCalledWith('table-a', expect.objectContaining({ viewId: undefined })));
+    expect(screen.getByText('新映射酒店')).toBeInTheDocument();
   });
 
   it('loads host data in View state and hides the config panel', async () => {

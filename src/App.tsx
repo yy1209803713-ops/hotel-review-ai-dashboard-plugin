@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Toast } from '@douyinfe/semi-ui';
-import { type IDataRange } from '@lark-base-open/js-sdk';
+import { SourceType, type IDataRange } from '@lark-base-open/js-sdk';
 import { ConfigPanel } from './components/ConfigPanel';
 import { DashboardShell } from './components/DashboardShell';
 import { DEFAULT_CONFIG, FIELD_LABELS } from './constants/defaults';
@@ -43,12 +43,20 @@ export default function App() {
   const [hostData, setHostData] = useState<unknown[][] | null>(null);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
+  const mountedRef = useRef(true);
+  const isCurrentConfigSourceRequest = (requestId?: number) =>
+    mountedRef.current && (requestId === undefined || configSourceRequestId.current === requestId);
 
   const isConfigMode = state === 'Create' || state === 'Config';
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
+  useEffect(() => {
     async function init() {
       setLoading(true);
       setError(null);
@@ -68,7 +76,7 @@ export default function App() {
         }
 
         const tableList = await runtime.getTableList();
-        if (!mounted) {
+        if (!mountedRef.current) {
           return;
         }
         setTables(tableList);
@@ -82,7 +90,7 @@ export default function App() {
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : '初始化失败');
       } finally {
-        if (mounted) {
+        if (mountedRef.current) {
           setLoading(false);
           runtime.setRendered();
         }
@@ -114,7 +122,7 @@ export default function App() {
 
     async function initializeConfigState() {
       const pluginConfig = await loadPluginConfig(runtime);
-      if (!mounted) {
+      if (!mountedRef.current) {
         return;
       }
       setConfig(pluginConfig);
@@ -132,7 +140,7 @@ export default function App() {
 
     async function initializeDisplayState() {
       const pluginConfig = await loadPluginConfig(runtime);
-      if (!mounted) {
+      if (!mountedRef.current) {
         return;
       }
       setConfig(pluginConfig);
@@ -156,18 +164,16 @@ export default function App() {
         runtime.getCategories(tableId),
         runtime.getTableDataRange(tableId),
       ]);
-      if (!mounted || configSourceRequestId.current !== requestId) {
+      if (!isCurrentConfigSourceRequest(requestId)) {
         return;
       }
 
       const runtimeCategories = categoryList as RuntimeCategory[];
+      const normalizedSource = normalizeSourceSelection(pluginConfig.source, dataRangeList as IDataRange[]);
       const configWithSuggestedFields = withSuggestedFieldMapping(
         {
           ...pluginConfig,
-          source: {
-            ...pluginConfig.source,
-            dataRange: pluginConfig.source.dataRange ?? (dataRangeList[0] as IDataRange | undefined),
-          },
+          source: normalizedSource,
         },
         runtimeCategories,
       );
@@ -177,7 +183,7 @@ export default function App() {
 
       if (loadPreview) {
         const previewData = await runtime.getPreviewData(buildDataConditions(configWithSuggestedFields));
-        if (!mounted || configSourceRequestId.current !== requestId) {
+        if (!isCurrentConfigSourceRequest(requestId)) {
           return;
         }
         setHostData(previewData);
@@ -189,9 +195,6 @@ export default function App() {
     }
 
     init();
-    return () => {
-      mounted = false;
-    };
   }, [state]);
 
   const stale = useMemo(() => {
@@ -422,7 +425,7 @@ export default function App() {
   }
 
   async function loadFilterOptionRecords(pluginConfig: PluginConfig, requestId?: number) {
-    const isCurrentRequest = () => requestId === undefined || configSourceRequestId.current === requestId;
+    const isCurrentRequest = () => isCurrentConfigSourceRequest(requestId);
     if (!pluginConfig.source.tableId.trim()) {
       if (isCurrentRequest()) {
         setOptionRecords([]);
@@ -450,7 +453,26 @@ export default function App() {
     setConfig(nextConfig);
     if (nextTableId === previousTableId) {
       if ((dataRangeChanged || fieldMappingChanged) && isConfigMode) {
-        setHostData(await runtime.getPreviewData(buildDataConditions(nextConfig)));
+        setError(null);
+        setOptionRecords([]);
+        const requestId = configSourceRequestId.current + 1;
+        configSourceRequestId.current = requestId;
+        try {
+          const [previewData, optionRecordsResult] = await Promise.all([
+            runtime.getPreviewData(buildDataConditions(nextConfig)),
+            hasFilterOptionRequiredFields(nextConfig.source.fields) ? readRecordsForConfig(runtime, nextConfig) : Promise.resolve(null),
+          ]);
+          if (!isCurrentConfigSourceRequest(requestId)) {
+            return;
+          }
+          setHostData(previewData);
+          setOptionRecords(optionRecordsResult ?? []);
+        } catch (cause) {
+          if (!isCurrentConfigSourceRequest(requestId)) {
+            return;
+          }
+          setError(cause instanceof Error ? cause.message : '读取字段配置失败');
+        }
       }
       return;
     }
@@ -480,18 +502,22 @@ export default function App() {
         runtime.getCategories(nextTableId),
         runtime.getTableDataRange(nextTableId),
       ]);
-      if (configSourceRequestId.current !== requestId) {
+      if (!isCurrentConfigSourceRequest(requestId)) {
         return;
       }
       const runtimeCategories = categoryList as RuntimeCategory[];
+      const normalizedSource = normalizeSourceSelection(
+        {
+          ...nextConfig.source,
+          dataRange: nextConfig.source.dataRange,
+          viewId: nextConfig.source.viewId,
+        },
+        dataRangeList as IDataRange[],
+      );
       const configWithSuggestedFields = withSuggestedFieldMapping(
         {
           ...nextConfig,
-          source: {
-            ...nextConfig.source,
-            dataRange: (dataRangeList[0] as IDataRange | undefined) ?? nextConfig.source.dataRange,
-            viewId: getViewIdFromDataRange(dataRangeList[0] as IDataRange | undefined),
-          },
+          source: normalizedSource,
         },
         runtimeCategories,
       );
@@ -499,13 +525,13 @@ export default function App() {
       setCategories(runtimeCategories);
       setDataRanges(dataRangeList as IDataRange[]);
       const previewData = await runtime.getPreviewData(buildDataConditions(configWithSuggestedFields));
-      if (configSourceRequestId.current !== requestId) {
+      if (!isCurrentConfigSourceRequest(requestId)) {
         return;
       }
       setHostData(previewData);
       loadFilterOptionRecords(configWithSuggestedFields, requestId).catch(() => undefined);
     } catch (cause) {
-      if (configSourceRequestId.current !== requestId) {
+      if (!isCurrentConfigSourceRequest(requestId)) {
         return;
       }
       setError(cause instanceof Error ? cause.message : '读取字段配置失败');
@@ -675,6 +701,27 @@ function getSaveValidationMessage(config: PluginConfig): string | null {
 
 function getViewIdFromDataRange(dataRange?: IDataRange): string | undefined {
   return dataRange?.type === 'VIEW' ? dataRange.viewId : undefined;
+}
+
+function getDataRangeValue(dataRange?: IDataRange): string | undefined {
+  if (!dataRange) {
+    return undefined;
+  }
+  return dataRange.type === SourceType.VIEW ? `${SourceType.VIEW}:${dataRange.viewId}` : SourceType.ALL;
+}
+
+function normalizeSourceSelection(source: PluginConfig['source'], dataRanges: IDataRange[]): PluginConfig['source'] {
+  const fallbackDataRange = dataRanges[0] ?? ({ type: SourceType.ALL } as IDataRange);
+  const requestedValue = getDataRangeValue(source.dataRange);
+  const resolvedDataRange = dataRanges.length
+    ? (requestedValue ? dataRanges.find((dataRange) => getDataRangeValue(dataRange) === requestedValue) : undefined) ?? fallbackDataRange
+    : source.dataRange ?? fallbackDataRange;
+
+  return {
+    ...source,
+    dataRange: resolvedDataRange,
+    viewId: getViewIdFromDataRange(resolvedDataRange),
+  };
 }
 
 function isSameDataRange(left?: IDataRange, right?: IDataRange): boolean {
