@@ -581,6 +581,20 @@ mark {
   text-align: center;
 }
 
+.state-panel-compact {
+  display: flex;
+  min-height: 48px;
+  justify-content: center;
+  padding: 10px 14px;
+  border-style: solid;
+  background: var(--blue-soft);
+}
+
+.state-panel-compact .state-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .state-title {
   color: var(--text);
   font-size: 18px;

@@ -284,7 +284,7 @@ export async function mergeEvidenceTopics(params: {
           {
             role: 'system',
             content:
-              '你是通用评论主题归并助手。只输出一个严格 JSON 对象，不要输出 Markdown。输入里的 quotes 已经过程序校验为评论原文片段；你的任务是把同义或近义的 sourceLabel 归入 topicGroups，并明确区分 category、mergeKey、displayTopic。sentiment 只能是 positive 或 negative，其他一律不允许；禁止返回 mixed、neutral、both、ambivalent。混合证据按主导方向归类，混合评论必须拆成 positive group 或 negative group。acceptedQuotes 只能保留与该 topicGroup 语义匹配的原文片段，不匹配的 quote 不要放入 acceptedQuotes。',
+              '你是通用评论主题归并助手。只输出一个严格 JSON 对象，不要输出 Markdown。输入里的 quotes 已经过程序校验为评论原文片段；你的任务是把同义或近义的 sourceLabel 归入 groups，并明确区分 category、mergeKey、displayTopic。sentiment 只能是 positive 或 negative，其他一律不允许；禁止返回 mixed、neutral、both、ambivalent。混合证据按主导方向归类，混合评论必须拆成 positive group 或 negative group。acceptedQuotes 只能保留与该 group 语义匹配的原文片段，不匹配的 quote 不要放入 acceptedQuotes。',
           },
           {
             role: 'user',
@@ -413,7 +413,7 @@ function buildBatchPrompt(records: ReviewRecord[]): string {
 function buildTopicMergePrompt(candidates: TopicMergeCandidate[], topN: number): string {
   return JSON.stringify({
     task:
-      '对已验证的评论证据做全局主题归并。请输出 topicGroups，而不是逐个 sourceLabel 的扁平映射。每个 group 表示一个最终 Top 主题，并通过 members 说明哪些 sourceLabel 和 quote 归入该主题。',
+      '对已验证的评论证据做全局主题归并。请输出 groups，而不是逐个 sourceLabel 的扁平映射。每个 group 表示一个最终 Top 主题，并通过 members 说明哪些 sourceLabel 和 quote 归入该主题。',
     rules: [
       '这是通用评论分析，不要假设一定是酒店、电商或餐饮；根据输入 quote 自身判断。',
       'sentiment 只能是 positive 或 negative，其他一律不允许；禁止返回 mixed、neutral、both、ambivalent。',

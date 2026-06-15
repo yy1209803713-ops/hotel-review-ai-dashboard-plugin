@@ -14,7 +14,7 @@ V1.2 将分析链路从 `topic -> recordIds` 调整为 `record -> quote evidence
 
 - AI 批处理只抽取 `evidenceItems`，每条证据包含 `recordId`、`quote`、`sentiment`、`aspectLabel`。
 - 程序校验 `recordId` 必须存在，`quote` 必须能在评论正文 `content` 中命中。
-- 全局主题归并阶段返回 `topicGroups`，明确拆分 `category`、`mergeKey`、`displayTopic`，并在成员级别返回 `acceptedQuotes`，同一 `aspectLabel` 里混入的无关 quote 会被剔除，避免“雪花酥”这类证据挂到“地理位置”主题。
+- 全局主题归并阶段返回 `groups`，明确拆分 `category`、`mergeKey`、`displayTopic`，并在成员级别返回 `acceptedQuotes`，同一 `aspectLabel` 里混入的无关 quote 会被剔除，避免“雪花酥”这类证据挂到“地理位置”主题。
 - 评论可以贡献多个证据；同一条评论既有好评也有负面细节时，会同时计入好评主题和风险主题，并进入 `mixedReviews`。
 - 主题命中数由程序按去重后的 `commentRecordIds` 重算，不再相信 AI 返回的 count。
 - 写回 `AI主题汇总` 时新增 `证据片段 JSON`，方便追溯主题证据。

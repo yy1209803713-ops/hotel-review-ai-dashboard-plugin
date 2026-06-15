@@ -106,9 +106,6 @@ export default function App() {
 
     setError(null);
     setLoading(true);
-    setSelectedTopic(null);
-    setEvidenceRecords([]);
-    setEvidencePage(1);
     Toast.info('开始读取评论并更新 AI 聚合分析');
 
     try {
@@ -123,7 +120,6 @@ export default function App() {
       }));
 
       if (!filtered.length) {
-        setAnalysis(null);
         setError('当前筛选范围内没有可分析评论');
         return;
       }
@@ -178,6 +174,9 @@ export default function App() {
       setConfig((current) => ({ ...current, filters, analysisCache: cache }));
       setCurrentScope(scope);
       setAnalysis(result);
+      setSelectedTopic(null);
+      setEvidenceRecords([]);
+      setEvidencePage(1);
       Toast.success('AI 聚合分析已更新');
     } catch (cause) {
       const message = formatAiClientError(cause);

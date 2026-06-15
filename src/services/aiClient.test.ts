@@ -297,6 +297,8 @@ describe('analyzeBatch', () => {
     expect(prompt).toContain('sentiment 只能是 positive 或 negative，其他一律不允许');
     expect(prompt).toContain('禁止返回 mixed、neutral、both、ambivalent');
     expect(prompt).toContain('混合证据按主导方向归类');
+    expect(prompt).toContain('请输出 groups');
+    expect(prompt).not.toContain('topicGroups');
     expect(prompt).toContain('地理位置好，出行方便');
     expect(prompt).toContain('卫生做得很好，打扫得很及时');
   });

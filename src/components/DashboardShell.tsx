@@ -52,9 +52,10 @@ export function DashboardShell(props: {
         <div className="content">
           {props.error ? <ErrorBanner message={props.error} /> : null}
           {props.stale ? <StaleBanner /> : null}
-          {props.loading ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
+          {props.loading && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
+          {props.loading && props.analysis ? <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact /> : null}
           {!props.loading && !props.analysis ? <EmptyState onUpdate={props.onUpdate} /> : null}
-          {!props.loading && props.analysis ? (
+          {props.analysis ? (
             <>
               <OverviewMetrics overview={props.analysis.overview} />
               <section className="topic-grid">

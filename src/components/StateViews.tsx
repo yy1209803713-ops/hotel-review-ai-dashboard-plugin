@@ -1,9 +1,9 @@
 import { Banner, Button, Spin } from '@douyinfe/semi-ui';
 
-export function LoadingPanel({ message }: { message: string }) {
+export function LoadingPanel({ message, compact = false }: { message: string; compact?: boolean }) {
   return (
-    <div className="state-panel">
-      <Spin size="large" />
+    <div className={compact ? 'state-panel state-panel-compact' : 'state-panel'}>
+      <Spin size={compact ? 'middle' : 'large'} />
       <div className="state-title">{message}</div>
     </div>
   );

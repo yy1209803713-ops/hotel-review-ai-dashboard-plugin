@@ -11,7 +11,20 @@ dayjs.extend(timezone);
 
 export const TIME_ZONE = 'Asia/Shanghai';
 
-const DATE_FORMATS = ['YYYY-MM-DD HH:mm:ss', 'YYYY/MM/DD HH:mm:ss', 'YYYY-MM-DD', 'YYYY/MM/DD'];
+const DATE_FORMATS = [
+  'YYYY-MM-DD HH:mm:ss',
+  'YYYY/MM/DD HH:mm:ss',
+  'YYYY-MM-DD HH:mm',
+  'YYYY/MM/DD HH:mm',
+  'YYYY-M-D HH:mm:ss',
+  'YYYY/M/D HH:mm:ss',
+  'YYYY-M-D HH:mm',
+  'YYYY/M/D HH:mm',
+  'YYYY-MM-DD',
+  'YYYY/MM/DD',
+  'YYYY-M-D',
+  'YYYY/M/D',
+];
 
 export function parseReviewDate(value: string | null | undefined): Dayjs | null {
   const text = value?.trim();

@@ -61,6 +61,15 @@ describe('parseReviewDate', () => {
     );
   });
 
+  it('parses compact timestamps without leading zeros or seconds', () => {
+    expect(parseReviewDate('2026/6/12 16:01')?.format('YYYY-MM-DD HH:mm:ss')).toBe(
+      '2026-06-12 16:01:00',
+    );
+    expect(parseReviewDate('2026/6/11 7:07')?.format('YYYY-MM-DD HH:mm:ss')).toBe(
+      '2026-06-11 07:07:00',
+    );
+  });
+
   it('returns null for empty or invalid values', () => {
     expect(parseReviewDate('')).toBeNull();
     expect(parseReviewDate('not a date')).toBeNull();
