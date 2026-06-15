@@ -12,6 +12,7 @@ export function ConfigPanel(props: {
   dataRanges: IDataRange[];
   saving: boolean;
   testingConnection: boolean;
+  disabled?: boolean;
   onChange: (config: PluginConfig) => void;
   onSave: () => void;
   onTestConnection: () => void;
@@ -174,10 +175,10 @@ export function ConfigPanel(props: {
         ) : null}
       </div>
       <div className="config-actions">
-        <Button loading={props.testingConnection} onClick={props.onTestConnection}>
+        <Button disabled={props.disabled} loading={props.testingConnection} onClick={props.onTestConnection}>
           测试连接
         </Button>
-        <Button theme="solid" loading={props.saving} onClick={props.onSave}>
+        <Button theme="solid" disabled={props.disabled} loading={props.saving} onClick={props.onSave}>
           保存配置
         </Button>
       </div>

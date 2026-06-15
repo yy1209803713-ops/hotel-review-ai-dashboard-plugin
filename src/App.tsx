@@ -598,6 +598,7 @@ export default function App() {
         dataRanges={dataRanges}
         saving={saving}
         testingConnection={testingConnection}
+        disabled={loading || saving}
         onChange={handleConfigChange}
         onSave={handleSaveConfig}
         onTestConnection={handleTestConnection}

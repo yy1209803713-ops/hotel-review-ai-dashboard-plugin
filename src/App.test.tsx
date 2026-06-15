@@ -21,8 +21,8 @@ vi.mock('./runtime/sdk', () => ({
 
 vi.mock('@douyinfe/semi-ui', () => ({
   Banner: (props: { description?: React.ReactNode }) => <div role="alert">{props.description}</div>,
-  Button: (props: { children: React.ReactNode; loading?: boolean; onClick?: () => void }) => (
-    <button type="button" disabled={props.loading} onClick={props.onClick}>
+  Button: (props: { children: React.ReactNode; disabled?: boolean; loading?: boolean; onClick?: () => void }) => (
+    <button type="button" disabled={props.disabled || props.loading} onClick={props.onClick}>
       {props.children}
     </button>
   ),
@@ -238,6 +238,45 @@ describe('App initialization', () => {
         }),
       }),
     );
+  });
+
+  it('blocks saving stale config while saved view normalization is still loading', async () => {
+    const rangeLoad = deferred<unknown[]>();
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [
+          {
+            tableId: 'tbl1',
+            dataRange: viewDataRange('view-stale', '旧视图'),
+            groups: [{ fieldId: 'fld_a_review_id' }],
+            series: 'COUNTA' as const,
+          },
+        ],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          viewId: 'view-stale',
+          dataRange: viewDataRange('view-stale', '旧视图'),
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableDataRange: vi.fn(async () => rangeLoad.promise),
+      getCategories: vi.fn(async () => optionCategories('a')),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('保存配置')).toBeDisabled());
+    fireEvent.click(screen.getByText('保存配置'));
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rangeLoad.resolve([]);
+      await rangeLoad.promise;
+    });
+    await waitFor(() => expect(screen.getByText('保存配置')).not.toBeDisabled());
   });
 
   it('refreshes preview data when the data range changes on the same table', async () => {
