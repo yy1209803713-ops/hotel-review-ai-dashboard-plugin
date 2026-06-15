@@ -47,7 +47,10 @@ export type DashboardRuntime = {
   getTheme(): Promise<RuntimeTheme>;
   onThemeChange(callback: (theme: RuntimeTheme) => void): () => void;
   getConfig(): Promise<RuntimeConfig>;
+  getPreviewData(dataConditions: unknown): Promise<unknown[][]>;
+  getData(): Promise<unknown[][]>;
   saveConfig(config: RuntimeConfig): Promise<boolean>;
+  onDataChange(callback: (data: unknown[][]) => void): () => void;
   onConfigChange(callback: (config: RuntimeConfig) => void): () => void;
   getTableList(): Promise<RuntimeTable[]>;
   getFieldMetaList(tableId: string): Promise<RuntimeCategory[]>;
@@ -102,11 +105,14 @@ export function createFixtureRuntime(
     }),
     onThemeChange: () => () => undefined,
     getConfig: async () => config,
+    getPreviewData: async () => [],
+    getData: async () => [],
     saveConfig: async (nextConfig) => {
       config = nextConfig;
       saveFixtureConfig(nextConfig);
       return true;
     },
+    onDataChange: () => () => undefined,
     onConfigChange: () => () => undefined,
     getTableList: async () => [
       {
@@ -271,7 +277,10 @@ export function createLarkRuntime(): DashboardRuntime {
       }
       return (await dashboard.getConfig()) as RuntimeConfig;
     },
+    getPreviewData: (dataConditions) => dashboard.getPreviewData(dataConditions as never),
+    getData: () => dashboard.getData(),
     saveConfig: (config) => dashboard.saveConfig(config as never),
+    onDataChange: (callback) => dashboard.onDataChange((event) => callback(event.data)),
     onConfigChange: (callback) => dashboard.onConfigChange((event) => callback(event.data as RuntimeConfig)),
     getTableList: async () => {
       const tables = await bitable.base.getTableList();

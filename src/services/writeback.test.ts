@@ -51,7 +51,10 @@ function fakeRuntime(options: { canEdit?: boolean; tables?: RuntimeTable[] } = {
     getTheme: vi.fn(),
     onThemeChange: vi.fn(() => () => undefined),
     getConfig: vi.fn(async (): Promise<RuntimeConfig> => ({ dataConditions: [] })),
+    getPreviewData: vi.fn(async () => []),
+    getData: vi.fn(async () => []),
     saveConfig: vi.fn(async () => true),
+    onDataChange: vi.fn(() => () => undefined),
     onConfigChange: vi.fn(() => () => undefined),
     getTableList: vi.fn(async () => tables),
     getFieldMetaList: vi.fn(async (tableId: string) => {

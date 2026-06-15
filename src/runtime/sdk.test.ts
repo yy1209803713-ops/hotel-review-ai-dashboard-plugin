@@ -119,6 +119,17 @@ describe('createFixtureRuntime', () => {
     expect((await runtime.getConfig()).customConfig?.ai.model).toBe('gpt-4.1-mini');
   });
 
+  it('provides fixture preview/data/event methods for all dashboard states', async () => {
+    const runtime = createFixtureRuntime({ state: 'Create' });
+
+    expect(runtime.getState()).toBe('Create');
+    await expect(runtime.getPreviewData([])).resolves.toEqual([]);
+    await expect(runtime.getData()).resolves.toEqual([]);
+    expect(runtime.onDataChange(() => undefined)).toBeTypeOf('function');
+    expect(runtime.onConfigChange(() => undefined)).toBeTypeOf('function');
+    expect(runtime.onThemeChange(() => undefined)).toBeTypeOf('function');
+  });
+
   it('can preload bundled demo analysis for local preview', async () => {
     const runtime = createFixtureRuntime({ state: 'View', demoAnalysis: true });
     const config = await runtime.getConfig();
