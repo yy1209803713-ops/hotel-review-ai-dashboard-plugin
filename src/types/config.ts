@@ -1,3 +1,6 @@
+import type { IDataRange } from '@lark-base-open/js-sdk';
+import type { AnalysisResult } from './analysis';
+
 export type FieldMapping = {
   reviewId: string;
   content: string;
@@ -55,7 +58,7 @@ export type PluginConfig = {
   source: {
     tableId: string;
     viewId?: string;
-    dataRange?: unknown;
+    dataRange?: IDataRange;
     fields: FieldMapping;
   };
   filters: FilterState;
@@ -63,4 +66,3 @@ export type PluginConfig = {
   writeback: WritebackConfig;
   analysisCache?: AnalysisCache;
 };
-import type { AnalysisResult } from './analysis';

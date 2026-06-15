@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG } from '../constants/defaults';
+import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import { normalizeReviewRecord, readReviewRecords, type RecordsPageReader } from './baseRecords';
 
 describe('normalizeReviewRecord', () => {
@@ -21,7 +21,7 @@ describe('normalizeReviewRecord', () => {
           ],
         },
       },
-      DEFAULT_CONFIG.source.fields,
+      FIXTURE_SOURCE_CONFIG.fields,
     );
 
     expect(record).toEqual({
@@ -87,9 +87,9 @@ describe('readReviewRecords', () => {
     };
 
     const records = await readReviewRecords(reader, {
-      tableId: DEFAULT_CONFIG.source.tableId,
-      viewId: DEFAULT_CONFIG.source.viewId,
-      fields: DEFAULT_CONFIG.source.fields,
+      tableId: FIXTURE_SOURCE_CONFIG.tableId,
+      viewId: FIXTURE_SOURCE_CONFIG.viewId,
+      fields: FIXTURE_SOURCE_CONFIG.fields,
     });
 
     expect(records.map((record) => record.recordId)).toEqual(['rec1']);

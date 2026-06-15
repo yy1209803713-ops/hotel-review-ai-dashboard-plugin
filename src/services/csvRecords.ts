@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG } from '../constants/defaults';
+import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import type { RawSdkRecord } from './baseRecords';
 
 export const LOCAL_CSV_DATASET_PATH = '/hotel_xx_comments_25_merged_with_names.csv';
@@ -21,7 +21,7 @@ export function csvTextToRawReviewRecords(text: string): RawSdkRecord[] {
   }
 
   const headerIndex = buildHeaderIndex(rows[0]);
-  const fields = DEFAULT_CONFIG.source.fields;
+  const fields = FIXTURE_SOURCE_CONFIG.fields;
 
   return rows
     .slice(1)

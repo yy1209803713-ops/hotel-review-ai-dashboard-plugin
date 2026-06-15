@@ -2,8 +2,6 @@ import { DEFAULT_CONFIG } from '../constants/defaults';
 import type { DashboardRuntime, RuntimeConfig } from '../runtime/sdk';
 import type { AnalysisCache, PluginConfig } from '../types/config';
 
-const LOCAL_STORAGE_PREFIX = 'hotel-review-ai-dashboard';
-
 export async function loadPluginConfig(runtime: DashboardRuntime): Promise<PluginConfig> {
   const config = await runtime.getConfig();
   return normalizePluginConfig(config.customConfig ?? DEFAULT_CONFIG);
@@ -33,12 +31,7 @@ export async function saveAnalysisCache(runtime: DashboardRuntime, analysisCache
     },
   };
 
-  try {
-    await runtime.saveConfig(nextConfig);
-  } catch {
-    const instanceId = await runtime.getInstanceId();
-    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}:${instanceId}`, JSON.stringify(nextConfig.customConfig));
-  }
+  await runtime.saveConfig(nextConfig);
 }
 
 function normalizePluginConfig(config: PluginConfig): PluginConfig {
@@ -65,7 +58,7 @@ function normalizePluginConfig(config: PluginConfig): PluginConfig {
       ...DEFAULT_CONFIG.ai,
       ...config.ai,
       apiBaseUrl: isOldEmptyEndpoint ? DEFAULT_CONFIG.ai.apiBaseUrl : config.ai.apiBaseUrl,
-      apiKey: isEmptyApiKey ? DEFAULT_CONFIG.ai.apiKey : config.ai.apiKey,
+      apiKey: isEmptyApiKey ? '' : config.ai.apiKey,
       model: isOldDefaultModel ? DEFAULT_CONFIG.ai.model : config.ai.model,
     },
     writeback: {

@@ -27,17 +27,17 @@ export const TOPIC_CATEGORIES = [
 export const DEFAULT_CONFIG: PluginConfig = {
   version: 1,
   source: {
-    tableId: 'tbl37qjFGwC2XccK',
-    viewId: 'vew4P7LY9a',
+    tableId: '',
+    viewId: '',
     fields: {
-      reviewId: 'fldVtWzH6z',
-      content: 'fld5T66ajC',
-      hotelName: 'fld2vyUWnW',
-      score: 'fld5x0xdlt',
-      reviewDate: 'fld75mtSQz',
-      checkInMonth: 'fld4GSbB7A',
-      replyContent: 'fld5lYCMLN',
-      roomType: 'fld1eRxoQS',
+      reviewId: '',
+      content: '',
+      hotelName: '',
+      score: '',
+      reviewDate: '',
+      checkInMonth: '',
+      replyContent: '',
+      roomType: '',
     },
   },
   filters: {
@@ -53,7 +53,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   },
   ai: {
     apiBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    apiKey: 'sk-4190dd08fdf0420786ee73334c187811',
+    apiKey: '',
     model: 'qwen-plus',
     temperature: 0.2,
     maxBatchSize: 10,
@@ -61,7 +61,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
     topN: 10,
   },
   writeback: {
-    enabled: true,
+    enabled: false,
     confirmed: false,
   },
 };

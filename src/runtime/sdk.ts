@@ -12,6 +12,7 @@ import {
 } from '@lark-base-open/js-sdk';
 import { DEFAULT_CONFIG } from '../constants/defaults';
 import { FIXTURE_ANALYSIS_RESULT } from '../fixtures/analysis';
+import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import { FIXTURE_RAW_RECORDS } from '../fixtures/reviews';
 import type { RawSdkRecord, RecordsPage } from '../services/baseRecords';
 import { csvTextToRawReviewRecords, LOCAL_CSV_DATASET_PATH } from '../services/csvRecords';
@@ -107,7 +108,7 @@ export function createFixtureRuntime(
     onConfigChange: () => () => undefined,
     getTableList: async () => [
       {
-        tableId: DEFAULT_CONFIG.source.tableId,
+        tableId: FIXTURE_SOURCE_CONFIG.tableId,
         tableName: '酒店评论',
       },
     ],
@@ -116,7 +117,7 @@ export function createFixtureRuntime(
       { type: SourceType.ALL },
       {
         type: SourceType.VIEW,
-        viewId: DEFAULT_CONFIG.source.viewId,
+        viewId: FIXTURE_SOURCE_CONFIG.viewId,
         viewName: '表格',
       },
     ],
@@ -148,30 +149,34 @@ function createFixtureConfig(includeAnalysisCache: boolean): RuntimeConfig {
   const customConfig: PluginConfig = includeAnalysisCache
     ? {
         ...DEFAULT_CONFIG,
+        source: FIXTURE_SOURCE_CONFIG,
         analysisCache: {
           result: FIXTURE_ANALYSIS_RESULT,
           scopeSnapshot: {
             filters: DEFAULT_CONFIG.filters,
-            fields: DEFAULT_CONFIG.source.fields,
+            fields: FIXTURE_SOURCE_CONFIG.fields,
             model: DEFAULT_CONFIG.ai.model,
             totalReviews: FIXTURE_ANALYSIS_RESULT.overview.totalReviews,
             firstRecordId: 'rec27ww4KBxDj2',
             lastRecordId: 'recFixtureRisk02',
           },
-          sourceSnapshot: DEFAULT_CONFIG.source,
+          sourceSnapshot: FIXTURE_SOURCE_CONFIG,
           model: DEFAULT_CONFIG.ai.model,
           generatedAt: FIXTURE_ANALYSIS_RESULT.generatedAt,
         },
       }
-    : DEFAULT_CONFIG;
+    : {
+        ...DEFAULT_CONFIG,
+        source: FIXTURE_SOURCE_CONFIG,
+      };
 
   return {
     dataConditions: [
       {
-        tableId: DEFAULT_CONFIG.source.tableId,
+        tableId: FIXTURE_SOURCE_CONFIG.tableId,
         dataRange: {
           type: SourceType.VIEW,
-          viewId: DEFAULT_CONFIG.source.viewId,
+          viewId: FIXTURE_SOURCE_CONFIG.viewId,
           viewName: '表格',
         },
         series: 'COUNTA',
@@ -365,12 +370,12 @@ function getFixtureDemoFromUrl(): boolean {
 }
 
 const fixtureCategories: RuntimeCategory[] = [
-  { fieldId: DEFAULT_CONFIG.source.fields.reviewId, fieldName: '评论ID', fieldType: FieldType.Number },
-  { fieldId: DEFAULT_CONFIG.source.fields.content, fieldName: '评论内容', fieldType: FieldType.Text },
-  { fieldId: DEFAULT_CONFIG.source.fields.hotelName, fieldName: '酒店名称', fieldType: FieldType.Text },
-  { fieldId: DEFAULT_CONFIG.source.fields.score, fieldName: '评分', fieldType: FieldType.Number },
-  { fieldId: DEFAULT_CONFIG.source.fields.reviewDate, fieldName: '评论日期', fieldType: FieldType.Text },
-  { fieldId: DEFAULT_CONFIG.source.fields.checkInMonth, fieldName: '入住日期', fieldType: FieldType.SingleSelect },
-  { fieldId: DEFAULT_CONFIG.source.fields.replyContent, fieldName: '酒店回复内容', fieldType: FieldType.Text },
-  { fieldId: DEFAULT_CONFIG.source.fields.roomType, fieldName: '房型', fieldType: FieldType.Text },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.reviewId, fieldName: '评论ID', fieldType: FieldType.Number },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.content, fieldName: '评论内容', fieldType: FieldType.Text },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.hotelName, fieldName: '酒店名称', fieldType: FieldType.Text },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.score, fieldName: '评分', fieldType: FieldType.Number },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.reviewDate, fieldName: '评论日期', fieldType: FieldType.Text },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.checkInMonth, fieldName: '入住日期', fieldType: FieldType.SingleSelect },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.replyContent, fieldName: '酒店回复内容', fieldType: FieldType.Text },
+  { fieldId: FIXTURE_SOURCE_CONFIG.fields.roomType, fieldName: '房型', fieldType: FieldType.Text },
 ];

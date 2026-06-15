@@ -32,7 +32,7 @@ describe('cacheStore', () => {
     expect(config.ai.model).toBe('qwen-plus');
   });
 
-  it('fills the default API key when an old saved config has an empty key', async () => {
+  it('keeps an empty API key when an old saved config has no key', async () => {
     const runtime = fakeRuntime({
       dataConditions: [],
       customConfig: {
@@ -46,7 +46,7 @@ describe('cacheStore', () => {
 
     const config = await loadPluginConfig(runtime);
 
-    expect(config.ai.apiKey).toBe(DEFAULT_CONFIG.ai.apiKey);
+    expect(config.ai.apiKey).toBe('');
   });
 
   it('preserves plugin config and replaces only analysisCache', async () => {
@@ -79,7 +79,7 @@ describe('cacheStore', () => {
     expect(configAfterSave.customConfig?.analysisCache).toEqual(cache);
   });
 
-  it('falls back to localStorage if Dashboard save fails', async () => {
+  it('surfaces Dashboard save failures instead of falling back to localStorage', async () => {
     const runtime = fakeRuntime(
       { dataConditions: [], customConfig: DEFAULT_CONFIG },
       () => Promise.reject(new Error('save failed')),
@@ -88,13 +88,13 @@ describe('cacheStore', () => {
       result: { ...FIXTURE_ANALYSIS_RESULT, analysisId: 'analysis-2' },
       scopeSnapshot: {},
       sourceSnapshot: {},
-      model: 'gpt-4o-mini',
+      model: 'qwen-plus',
       generatedAt: '2026-06-03T12:00:00+08:00',
     };
 
-    await saveAnalysisCache(runtime, cache);
+    await expect(saveAnalysisCache(runtime, cache)).rejects.toThrow('save failed');
 
-    expect(localStorage.getItem('hotel-review-ai-dashboard:fixture-instance')).toContain('analysis-2');
+    expect(localStorage.getItem('hotel-review-ai-dashboard:fixture-instance')).toBeNull();
   });
 });
 

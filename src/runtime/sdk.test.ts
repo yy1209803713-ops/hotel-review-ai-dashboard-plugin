@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../constants/defaults';
+import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import type { RawSdkRecord } from '../services/baseRecords';
 import { createFixtureRuntime } from './sdk';
 
 describe('createFixtureRuntime', () => {
-  const fields = DEFAULT_CONFIG.source.fields;
+  const fields = FIXTURE_SOURCE_CONFIG.fields;
   const records: RawSdkRecord[] = [
     {
       recordId: 'rec1',
@@ -39,12 +40,12 @@ describe('createFixtureRuntime', () => {
 
   it('paginates local records with stable page tokens', async () => {
     const runtime = createFixtureRuntime({ state: 'View', records });
-    const first = await runtime.readRecordsPage(DEFAULT_CONFIG.source.tableId, {
-      viewId: DEFAULT_CONFIG.source.viewId,
+    const first = await runtime.readRecordsPage(FIXTURE_SOURCE_CONFIG.tableId, {
+      viewId: FIXTURE_SOURCE_CONFIG.viewId,
       pageSize: 2,
     });
-    const second = await runtime.readRecordsPage(DEFAULT_CONFIG.source.tableId, {
-      viewId: DEFAULT_CONFIG.source.viewId,
+    const second = await runtime.readRecordsPage(FIXTURE_SOURCE_CONFIG.tableId, {
+      viewId: FIXTURE_SOURCE_CONFIG.viewId,
       pageSize: 2,
       pageToken: first.pageToken,
     });
@@ -69,7 +70,7 @@ describe('createFixtureRuntime', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const runtime = createFixtureRuntime({ state: 'View', csvUrl: '/local.csv' });
-    const page = await runtime.readRecordsPage(DEFAULT_CONFIG.source.tableId, {
+    const page = await runtime.readRecordsPage(FIXTURE_SOURCE_CONFIG.tableId, {
       pageSize: 10,
     });
 
@@ -91,7 +92,7 @@ describe('createFixtureRuntime', () => {
     const runtime = createFixtureRuntime({ state: 'View', csvUrl: '/missing.csv' });
 
     await expect(
-      runtime.readRecordsPage(DEFAULT_CONFIG.source.tableId, {
+      runtime.readRecordsPage(FIXTURE_SOURCE_CONFIG.tableId, {
         pageSize: 10,
       }),
     ).rejects.toThrow('本地 CSV 数据源加载失败：/missing.csv 返回 404 Not Found');
@@ -100,7 +101,7 @@ describe('createFixtureRuntime', () => {
   it('stores config without calling a host SDK', async () => {
     const runtime = createFixtureRuntime({ state: 'Config' });
     const initial = await runtime.getConfig();
-    expect(initial.customConfig?.source.tableId).toBe(DEFAULT_CONFIG.source.tableId);
+    expect(initial.customConfig?.source.tableId).toBe(FIXTURE_SOURCE_CONFIG.tableId);
     expect(initial.customConfig?.analysisCache).toBeUndefined();
 
     const updated = {
@@ -118,7 +119,7 @@ describe('createFixtureRuntime', () => {
   it('can preload bundled demo analysis for local preview', async () => {
     const runtime = createFixtureRuntime({ state: 'View', demoAnalysis: true });
     const config = await runtime.getConfig();
-    const records = await runtime.readRecordsByIds(DEFAULT_CONFIG.source.tableId, ['rec27ww4KBxDj2']);
+    const records = await runtime.readRecordsByIds(FIXTURE_SOURCE_CONFIG.tableId, ['rec27ww4KBxDj2']);
 
     expect(config.customConfig?.analysisCache?.result.analysisId).toBe('analysis-fixture-20260603');
     expect(config.customConfig?.analysisCache?.result.positiveTopics[0].commentRecordIds.length).toBeGreaterThan(0);
@@ -143,7 +144,7 @@ describe('createFixtureRuntime', () => {
               model: 'fixture-ai',
             },
             scopeSnapshot: {},
-            sourceSnapshot: DEFAULT_CONFIG.source,
+            sourceSnapshot: FIXTURE_SOURCE_CONFIG,
             model: 'fixture-ai',
             generatedAt: '2026-06-03T12:00:00+08:00',
           },

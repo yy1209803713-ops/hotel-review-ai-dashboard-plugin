@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG } from '../constants/defaults';
+import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import { csvTextToRawReviewRecords, parseCsvRows } from './csvRecords';
 
-const fields = DEFAULT_CONFIG.source.fields;
+const fields = FIXTURE_SOURCE_CONFIG.fields;
 
 describe('parseCsvRows', () => {
   it('parses quoted multiline cells and escaped quotes', () => {

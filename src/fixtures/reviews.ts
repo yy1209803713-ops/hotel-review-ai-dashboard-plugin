@@ -1,7 +1,7 @@
-import { DEFAULT_CONFIG } from '../constants/defaults';
+import { FIXTURE_SOURCE_CONFIG } from './dashboardSource';
 import type { RawSdkRecord } from '../services/baseRecords';
 
-const fields = DEFAULT_CONFIG.source.fields;
+const fields = FIXTURE_SOURCE_CONFIG.fields;
 
 export const FIXTURE_RAW_RECORDS: RawSdkRecord[] = [
   {
