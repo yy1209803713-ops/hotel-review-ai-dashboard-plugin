@@ -187,7 +187,7 @@ describe('App initialization', () => {
     expect(runtime.getData).not.toHaveBeenCalled();
   });
 
-  it('normalizes a stale saved view before save so persisted config matches the visible data range', async () => {
+  it('normalizes a stale saved view before save when the host has no range options', async () => {
     const runtime = fakeRuntime({
       getState: () => 'Config',
       getConfig: vi.fn(async () => ({
@@ -206,7 +206,7 @@ describe('App initialization', () => {
           fields: optionFieldMapping('a'),
         }),
       })),
-      getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }, viewDataRange('view-a', '有效评论')]),
+      getTableDataRange: vi.fn(async () => []),
       getCategories: vi.fn(async () => optionCategories('a')),
       readRecordsPage: vi.fn(async () => ({
         records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],

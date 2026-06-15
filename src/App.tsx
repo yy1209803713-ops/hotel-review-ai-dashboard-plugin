@@ -713,9 +713,9 @@ function getDataRangeValue(dataRange?: IDataRange): string | undefined {
 function normalizeSourceSelection(source: PluginConfig['source'], dataRanges: IDataRange[]): PluginConfig['source'] {
   const fallbackDataRange = dataRanges[0] ?? ({ type: SourceType.ALL } as IDataRange);
   const requestedValue = getDataRangeValue(source.dataRange);
-  const resolvedDataRange = dataRanges.length
-    ? (requestedValue ? dataRanges.find((dataRange) => getDataRangeValue(dataRange) === requestedValue) : undefined) ?? fallbackDataRange
-    : source.dataRange ?? fallbackDataRange;
+  const resolvedDataRange = requestedValue
+    ? dataRanges.find((dataRange) => getDataRangeValue(dataRange) === requestedValue) ?? fallbackDataRange
+    : fallbackDataRange;
 
   return {
     ...source,
