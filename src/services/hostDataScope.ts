@@ -16,6 +16,10 @@ export function parseHostVisibleReviewIds(data: unknown): Set<string> | null {
     return null;
   }
 
+  if (data.length === 1) {
+    return new Set<string>();
+  }
+
   const ids = new Set<string>();
   for (const row of data.slice(1)) {
     if (!Array.isArray(row)) {
@@ -47,6 +51,8 @@ function isReviewIdGroupedHeader(cell: HostDataItem | undefined): boolean {
     return false;
   }
 
-  const normalized = String(label).replace(/\s+/g, '').toLowerCase();
-  return normalized.includes('id');
+  const normalized = String(label).replace(/[\s_-]+/g, '').toLowerCase();
+  return REVIEW_ID_HEADER_LABELS.has(normalized);
 }
+
+const REVIEW_ID_HEADER_LABELS = new Set(['评论id', 'reviewid']);

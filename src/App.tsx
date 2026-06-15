@@ -167,6 +167,7 @@ export default function App() {
       setConfig(pluginConfig);
       setFilters(withComputedRange(pluginConfig.filters));
       setAnalysis(pluginConfig.analysisCache?.result ?? null);
+      setCurrentScope(pluginConfig.analysisCache?.scopeSnapshot ? (pluginConfig.analysisCache.scopeSnapshot as ScopeSnapshot) : null);
       if (!pluginConfig.source.tableId.trim()) {
         setHostData(null);
         return;
@@ -185,6 +186,7 @@ export default function App() {
       setConfig(pluginConfig);
       setFilters(withComputedRange(pluginConfig.filters));
       setAnalysis(pluginConfig.analysisCache?.result ?? null);
+      setCurrentScope(pluginConfig.analysisCache?.scopeSnapshot ? (pluginConfig.analysisCache.scopeSnapshot as ScopeSnapshot) : null);
       setDataRanges([]);
       setCategories([]);
       setHostData(await runtime.getData());
@@ -244,7 +246,10 @@ export default function App() {
     if (!cacheScope) {
       return true;
     }
-    return isCacheStale(cacheScope, currentScope ?? cacheScope);
+    if (!currentScope) {
+      return true;
+    }
+    return isCacheStale(cacheScope, currentScope);
   }, [analysis, config.analysisCache?.scopeSnapshot, currentScope]);
 
   const hotelOptions = useMemo(
