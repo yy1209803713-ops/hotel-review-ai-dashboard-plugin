@@ -8,6 +8,7 @@ import {
   PermissionEntity,
   SourceType,
   type ICategory,
+  type IDataCondition,
   type IDataRange,
 } from '@lark-base-open/js-sdk';
 import { DEFAULT_CONFIG } from '../constants/defaults';
@@ -16,6 +17,7 @@ import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import { FIXTURE_RAW_RECORDS } from '../fixtures/reviews';
 import type { RawSdkRecord, RecordsPage } from '../services/baseRecords';
 import { csvTextToRawReviewRecords, LOCAL_CSV_DATASET_PATH } from '../services/csvRecords';
+import { buildDataConditions } from '../services/dashboardConfig';
 import type { PluginConfig } from '../types/config';
 
 const FIXTURE_CONFIG_STORAGE_KEY = 'hotel-review-ai-dashboard:fixture-config';
@@ -23,7 +25,7 @@ const FIXTURE_CONFIG_STORAGE_KEY = 'hotel-review-ai-dashboard:fixture-config';
 export type DashboardStateName = 'Create' | 'Config' | 'View' | 'FullScreen';
 
 export type RuntimeConfig = {
-  dataConditions: unknown[];
+  dataConditions: IDataCondition[];
   customConfig?: PluginConfig;
 };
 
@@ -171,13 +173,7 @@ function createFixtureConfig(includeAnalysisCache: boolean): RuntimeConfig {
       };
 
   return {
-    dataConditions: [
-      {
-        tableId: FIXTURE_SOURCE_CONFIG.tableId,
-        dataRange: FIXTURE_SOURCE_CONFIG.dataRange,
-        series: 'COUNTA',
-      },
-    ],
+    dataConditions: buildDataConditions(customConfig),
     customConfig,
   };
 }

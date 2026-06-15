@@ -1,10 +1,12 @@
 import { DEFAULT_CONFIG } from '../constants/defaults';
 import type { DashboardRuntime, RuntimeConfig } from '../runtime/sdk';
 import type { AnalysisCache, PluginConfig } from '../types/config';
+import { buildDataConditions, getPrimaryDataCondition, mergeConfigWithDataCondition } from './dashboardConfig';
 
 export async function loadPluginConfig(runtime: DashboardRuntime): Promise<PluginConfig> {
   const config = await runtime.getConfig();
-  return normalizePluginConfig(config.customConfig ?? DEFAULT_CONFIG);
+  const pluginConfig = normalizePluginConfig(config.customConfig ?? DEFAULT_CONFIG);
+  return mergeConfigWithDataCondition(pluginConfig, getPrimaryDataCondition(config));
 }
 
 export async function loadAnalysisCache(runtime: DashboardRuntime): Promise<AnalysisCache | undefined> {
@@ -13,22 +15,25 @@ export async function loadAnalysisCache(runtime: DashboardRuntime): Promise<Anal
 }
 
 export async function savePluginConfig(runtime: DashboardRuntime, pluginConfig: PluginConfig): Promise<boolean> {
-  const current = await runtime.getConfig();
   return persistRuntimeConfig(runtime, {
-    dataConditions: current.dataConditions,
+    dataConditions: buildDataConditions(pluginConfig),
     customConfig: pluginConfig,
   });
 }
 
 export async function saveAnalysisCache(runtime: DashboardRuntime, analysisCache: AnalysisCache): Promise<void> {
   const current = await runtime.getConfig();
-  const pluginConfig = normalizePluginConfig(current.customConfig ?? DEFAULT_CONFIG);
+  const pluginConfig = mergeConfigWithDataCondition(
+    normalizePluginConfig(current.customConfig ?? DEFAULT_CONFIG),
+    getPrimaryDataCondition(current),
+  );
+  const nextPluginConfig = {
+    ...pluginConfig,
+    analysisCache,
+  };
   const nextConfig: RuntimeConfig = {
-    dataConditions: current.dataConditions,
-    customConfig: {
-      ...pluginConfig,
-      analysisCache,
-    },
+    dataConditions: buildDataConditions(nextPluginConfig),
+    customConfig: nextPluginConfig,
   };
 
   await persistRuntimeConfig(runtime, nextConfig);

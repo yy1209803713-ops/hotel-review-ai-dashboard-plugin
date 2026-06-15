@@ -53,14 +53,16 @@ export type AnalysisCache = {
   generatedAt: string;
 };
 
+export type SourceConfig = {
+  tableId: string;
+  viewId?: string;
+  dataRange?: IDataRange;
+  fields: FieldMapping;
+};
+
 export type PluginConfig = {
   version: 1;
-  source: {
-    tableId: string;
-    viewId?: string;
-    dataRange?: IDataRange;
-    fields: FieldMapping;
-  };
+  source: SourceConfig;
   filters: FilterState;
   ai: AiConfig;
   writeback: WritebackConfig;

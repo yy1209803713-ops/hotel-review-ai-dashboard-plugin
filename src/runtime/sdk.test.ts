@@ -104,6 +104,7 @@ describe('createFixtureRuntime', () => {
     expect(initial.customConfig?.source.tableId).toBe(FIXTURE_SOURCE_CONFIG.tableId);
     expect(initial.customConfig?.source.dataRange).toBe(FIXTURE_SOURCE_CONFIG.dataRange);
     expect((initial.dataConditions[0] as { dataRange?: unknown }).dataRange).toBe(FIXTURE_SOURCE_CONFIG.dataRange);
+    expect(initial.dataConditions[0]?.groups).toEqual([{ fieldId: FIXTURE_SOURCE_CONFIG.fields.reviewId }]);
     expect(initial.customConfig?.analysisCache).toBeUndefined();
 
     const updated = {

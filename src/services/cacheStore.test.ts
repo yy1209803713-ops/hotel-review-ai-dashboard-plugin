@@ -1,3 +1,4 @@
+import { SourceType } from '@lark-base-open/js-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../constants/defaults';
 import { FIXTURE_ANALYSIS_RESULT } from '../fixtures/analysis';
@@ -110,6 +111,81 @@ describe('cacheStore', () => {
     const configAfterSave = savedConfig as unknown as RuntimeConfig;
     expect(configAfterSave.customConfig?.ai.model).toBe('custom-model');
     expect(configAfterSave.customConfig?.analysisCache).toEqual(cache);
+  });
+
+  it('saves plugin config with dashboard data conditions', async () => {
+    let savedConfig: RuntimeConfig | null = null;
+    const pluginConfig: PluginConfig = {
+      ...DEFAULT_CONFIG,
+      source: {
+        ...DEFAULT_CONFIG.source,
+        tableId: 'tbl1',
+        viewId: 'vew1',
+        dataRange: { type: SourceType.VIEW, viewId: 'vew1', viewName: '表格' },
+        fields: { ...DEFAULT_CONFIG.source.fields, reviewId: 'fld_review_id' },
+      },
+    };
+    const runtime = fakeRuntime({ dataConditions: [], customConfig: DEFAULT_CONFIG }, async (config) => {
+      savedConfig = config;
+      return true;
+    });
+
+    await savePluginConfig(runtime, pluginConfig);
+
+    expect((savedConfig as unknown as RuntimeConfig).dataConditions).toEqual([
+      {
+        tableId: 'tbl1',
+        dataRange: { type: SourceType.VIEW, viewId: 'vew1', viewName: '表格' },
+        groups: [{ fieldId: 'fld_review_id' }],
+        series: 'COUNTA',
+      },
+    ]);
+  });
+
+  it('saves analysis cache with data conditions restored from Dashboard config', async () => {
+    let savedConfig: RuntimeConfig | null = null;
+    const runtime = fakeRuntime(
+      {
+        dataConditions: [
+          {
+            tableId: 'tbl1',
+            dataRange: { type: SourceType.ALL },
+            groups: [{ fieldId: 'fld_review_id' }],
+            series: 'COUNTA',
+          },
+        ],
+        customConfig: {
+          ...DEFAULT_CONFIG,
+          source: {
+            ...DEFAULT_CONFIG.source,
+            fields: { ...DEFAULT_CONFIG.source.fields, reviewId: 'fld_review_id' },
+          },
+        },
+      },
+      async (config) => {
+        savedConfig = config;
+        return true;
+      },
+    );
+    const cache: AnalysisCache = {
+      result: { ...FIXTURE_ANALYSIS_RESULT, analysisId: 'analysis-with-source' },
+      scopeSnapshot: {},
+      sourceSnapshot: {},
+      model: 'qwen-plus',
+      generatedAt: '2026-06-03T12:00:00+08:00',
+    };
+
+    await saveAnalysisCache(runtime, cache);
+
+    expect((savedConfig as unknown as RuntimeConfig).dataConditions).toEqual([
+      {
+        tableId: 'tbl1',
+        dataRange: { type: SourceType.ALL },
+        groups: [{ fieldId: 'fld_review_id' }],
+        series: 'COUNTA',
+      },
+    ]);
+    expect((savedConfig as unknown as RuntimeConfig).customConfig?.source.tableId).toBe('tbl1');
   });
 
   it('surfaces Dashboard save failures instead of falling back to localStorage', async () => {
