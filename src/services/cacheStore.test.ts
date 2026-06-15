@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../constants/defaults';
 import { FIXTURE_ANALYSIS_RESULT } from '../fixtures/analysis';
 import type { DashboardRuntime, RuntimeConfig } from '../runtime/sdk';
-import type { AnalysisCache } from '../types/config';
-import { loadPluginConfig, saveAnalysisCache } from './cacheStore';
+import type { AnalysisCache, PluginConfig } from '../types/config';
+import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './cacheStore';
 
 describe('cacheStore', () => {
   it('loads default plugin config when Dashboard config is empty', async () => {
@@ -47,6 +47,39 @@ describe('cacheStore', () => {
     const config = await loadPluginConfig(runtime);
 
     expect(config.ai.apiKey).toBe('');
+  });
+
+  it('normalizes partial legacy custom configs before reading nested AI values', async () => {
+    const runtime = fakeRuntime({
+      dataConditions: [],
+      customConfig: {
+        version: 1,
+        ai: {
+          model: 'gpt-4o-mini',
+          apiKey: '',
+        },
+      } as unknown as PluginConfig,
+    });
+
+    const config = await loadPluginConfig(runtime);
+
+    expect(config.source).toEqual(DEFAULT_CONFIG.source);
+    expect(config.filters).toEqual(DEFAULT_CONFIG.filters);
+    expect(config.writeback).toEqual(DEFAULT_CONFIG.writeback);
+    expect(config.ai.apiBaseUrl).toBe(DEFAULT_CONFIG.ai.apiBaseUrl);
+    expect(config.ai.apiKey).toBe('');
+    expect(config.ai.model).toBe(DEFAULT_CONFIG.ai.model);
+  });
+
+  it('normalizes configs that are missing ai and source blocks', async () => {
+    const runtime = fakeRuntime({
+      dataConditions: [],
+      customConfig: {
+        version: 1,
+      } as unknown as PluginConfig,
+    });
+
+    await expect(loadPluginConfig(runtime)).resolves.toEqual(DEFAULT_CONFIG);
   });
 
   it('preserves plugin config and replaces only analysisCache', async () => {
@@ -95,6 +128,25 @@ describe('cacheStore', () => {
     await expect(saveAnalysisCache(runtime, cache)).rejects.toThrow('save failed');
 
     expect(localStorage.getItem('hotel-review-ai-dashboard:fixture-instance')).toBeNull();
+  });
+
+  it('surfaces Dashboard save false results when writing analysis cache', async () => {
+    const runtime = fakeRuntime({ dataConditions: [], customConfig: DEFAULT_CONFIG }, () => Promise.resolve(false));
+    const cache: AnalysisCache = {
+      result: { ...FIXTURE_ANALYSIS_RESULT, analysisId: 'analysis-3' },
+      scopeSnapshot: {},
+      sourceSnapshot: {},
+      model: 'qwen-plus',
+      generatedAt: '2026-06-03T12:00:00+08:00',
+    };
+
+    await expect(saveAnalysisCache(runtime, cache)).rejects.toThrow('Dashboard saveConfig returned false');
+  });
+
+  it('surfaces Dashboard save false results when writing plugin config', async () => {
+    const runtime = fakeRuntime({ dataConditions: [], customConfig: DEFAULT_CONFIG }, () => Promise.resolve(false));
+
+    await expect(savePluginConfig(runtime, DEFAULT_CONFIG)).rejects.toThrow('Dashboard saveConfig returned false');
   });
 });
 

@@ -174,11 +174,7 @@ function createFixtureConfig(includeAnalysisCache: boolean): RuntimeConfig {
     dataConditions: [
       {
         tableId: FIXTURE_SOURCE_CONFIG.tableId,
-        dataRange: {
-          type: SourceType.VIEW,
-          viewId: FIXTURE_SOURCE_CONFIG.viewId,
-          viewName: '表格',
-        },
+        dataRange: FIXTURE_SOURCE_CONFIG.dataRange,
         series: 'COUNTA',
       },
     ],

@@ -11,13 +11,14 @@ import { ANALYSIS_COPY_VERSION, buildScopeSnapshot, isCacheStale, type ScopeSnap
 import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './services/cacheStore';
 import { writeAnalysisResult } from './services/writeback';
 import { formatAiClientError, testAiConnection } from './services/aiClient';
-import { runtime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
+import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
 import type { AnalysisCache, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
 
 const EVIDENCE_PAGE_SIZE = 10;
 
 export default function App() {
+  const runtime = defaultRuntime;
   const [state] = useState(runtime.getState());
   const [config, setConfig] = useState<PluginConfig>(DEFAULT_CONFIG);
   const [filters, setFilters] = useState<FilterState>(() => withComputedRange(DEFAULT_CONFIG.filters));
@@ -50,16 +51,23 @@ export default function App() {
         setConfig(pluginConfig);
         setFilters(withComputedRange(pluginConfig.filters));
         setAnalysis(pluginConfig.analysisCache?.result ?? null);
-        const [tableList, categoryList] = await Promise.all([
-          runtime.getTableList(),
-          runtime.getCategories(pluginConfig.source.tableId),
-        ]);
+        const tableList = await runtime.getTableList();
         if (!mounted) {
           return;
         }
         setTables(tableList);
+        if (!pluginConfig.source.tableId.trim()) {
+          setCategories([]);
+          setOptionRecords([]);
+          return;
+        }
+
+        const categoryList = await runtime.getCategories(pluginConfig.source.tableId);
+        if (!mounted) {
+          return;
+        }
         setCategories(categoryList as RuntimeCategory[]);
-        readRecordsForConfig(pluginConfig)
+        readRecordsForConfig(runtime, pluginConfig)
           .then((records) => {
             if (mounted) {
               setOptionRecords(records);
@@ -109,7 +117,7 @@ export default function App() {
     Toast.info('开始读取评论并更新 AI 聚合分析');
 
     try {
-      const records = await measureAnalysisStep(timingRows, '读表', () => readRecordsForConfig(config), (result) => ({
+      const records = await measureAnalysisStep(timingRows, '读表', () => readRecordsForConfig(runtime, config), (result) => ({
         records: result.length,
         detail: config.source.viewId ? `view=${config.source.viewId}` : `table=${config.source.tableId}`,
       }));
@@ -221,7 +229,7 @@ export default function App() {
 
     const start = (page - 1) * EVIDENCE_PAGE_SIZE;
     const pageRecordIds = topic.commentRecordIds.slice(start, start + EVIDENCE_PAGE_SIZE);
-    if (!pageRecordIds.length) {
+    if (!pageRecordIds.length || !config.source.tableId.trim()) {
       setEvidenceRecords([]);
       setEvidenceLoading(false);
       return;
@@ -275,8 +283,35 @@ export default function App() {
   }
 
   async function loadFilterOptionRecords(pluginConfig: PluginConfig) {
-    const records = await readRecordsForConfig(pluginConfig);
+    if (!pluginConfig.source.tableId.trim()) {
+      setOptionRecords([]);
+      return;
+    }
+    const records = await readRecordsForConfig(runtime, pluginConfig);
     setOptionRecords(records);
+  }
+
+  async function handleConfigChange(nextConfig: PluginConfig) {
+    const previousTableId = config.source.tableId;
+    const nextTableId = nextConfig.source.tableId;
+    setConfig(nextConfig);
+    if (nextTableId === previousTableId) {
+      return;
+    }
+
+    if (!nextTableId.trim()) {
+      setCategories([]);
+      setOptionRecords([]);
+      return;
+    }
+
+    try {
+      const categoryList = await runtime.getCategories(nextTableId);
+      setCategories(categoryList as RuntimeCategory[]);
+      loadFilterOptionRecords(nextConfig).catch(() => undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '读取字段配置失败');
+    }
   }
 
   function handleFilterChange(nextFilters: FilterState) {
@@ -338,7 +373,7 @@ export default function App() {
         categories={categories}
         saving={saving}
         testingConnection={testingConnection}
-        onChange={setConfig}
+        onChange={handleConfigChange}
         onSave={handleSaveConfig}
         onTestConnection={handleTestConnection}
       />
@@ -346,7 +381,11 @@ export default function App() {
   );
 }
 
-function readRecordsForConfig(pluginConfig: PluginConfig): Promise<ReviewRecord[]> {
+function readRecordsForConfig(runtime: DashboardRuntime, pluginConfig: PluginConfig): Promise<ReviewRecord[]> {
+  if (!pluginConfig.source.tableId.trim()) {
+    return Promise.resolve([]);
+  }
+
   return readReviewRecords(
     (params) =>
       runtime.readRecordsPage(params.tableId, {

@@ -14,7 +14,7 @@ export async function loadAnalysisCache(runtime: DashboardRuntime): Promise<Anal
 
 export async function savePluginConfig(runtime: DashboardRuntime, pluginConfig: PluginConfig): Promise<boolean> {
   const current = await runtime.getConfig();
-  return runtime.saveConfig({
+  return persistRuntimeConfig(runtime, {
     dataConditions: current.dataConditions,
     customConfig: pluginConfig,
   });
@@ -31,39 +31,53 @@ export async function saveAnalysisCache(runtime: DashboardRuntime, analysisCache
     },
   };
 
-  await runtime.saveConfig(nextConfig);
+  await persistRuntimeConfig(runtime, nextConfig);
 }
 
-function normalizePluginConfig(config: PluginConfig): PluginConfig {
-  const isOldEmptyEndpoint = !config.ai.apiBaseUrl.trim();
-  const isOldDefaultModel = config.ai.model === 'gpt-4o-mini' || !config.ai.model.trim();
-  const isEmptyApiKey = !config.ai.apiKey.trim();
+async function persistRuntimeConfig(runtime: DashboardRuntime, config: RuntimeConfig): Promise<boolean> {
+  const saved = await runtime.saveConfig(config);
+  if (!saved) {
+    throw new Error('Dashboard saveConfig returned false');
+  }
+  return saved;
+}
+
+function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
+  const source = {
+    ...DEFAULT_CONFIG.source,
+    ...config.source,
+    fields: {
+      ...DEFAULT_CONFIG.source.fields,
+      ...config.source?.fields,
+    },
+  };
+  const filters = {
+    ...DEFAULT_CONFIG.filters,
+    ...config.filters,
+  };
+  const ai = {
+    ...DEFAULT_CONFIG.ai,
+    ...config.ai,
+  };
+  const writeback = {
+    ...DEFAULT_CONFIG.writeback,
+    ...config.writeback,
+  };
+  const isOldEmptyEndpoint = !ai.apiBaseUrl.trim();
+  const isOldDefaultModel = ai.model === 'gpt-4o-mini' || !ai.model.trim();
+  const isEmptyApiKey = !ai.apiKey.trim();
 
   return {
     ...DEFAULT_CONFIG,
     ...config,
-    source: {
-      ...DEFAULT_CONFIG.source,
-      ...config.source,
-      fields: {
-        ...DEFAULT_CONFIG.source.fields,
-        ...config.source.fields,
-      },
-    },
-    filters: {
-      ...DEFAULT_CONFIG.filters,
-      ...config.filters,
-    },
+    source,
+    filters,
     ai: {
-      ...DEFAULT_CONFIG.ai,
-      ...config.ai,
-      apiBaseUrl: isOldEmptyEndpoint ? DEFAULT_CONFIG.ai.apiBaseUrl : config.ai.apiBaseUrl,
-      apiKey: isEmptyApiKey ? '' : config.ai.apiKey,
-      model: isOldDefaultModel ? DEFAULT_CONFIG.ai.model : config.ai.model,
+      ...ai,
+      apiBaseUrl: isOldEmptyEndpoint ? DEFAULT_CONFIG.ai.apiBaseUrl : ai.apiBaseUrl,
+      apiKey: isEmptyApiKey ? '' : ai.apiKey,
+      model: isOldDefaultModel ? DEFAULT_CONFIG.ai.model : ai.model,
     },
-    writeback: {
-      ...DEFAULT_CONFIG.writeback,
-      ...config.writeback,
-    },
+    writeback,
   };
 }
