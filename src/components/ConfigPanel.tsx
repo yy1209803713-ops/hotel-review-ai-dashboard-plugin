@@ -22,8 +22,12 @@ export function ConfigPanel(props: {
   const updateFields = (key: keyof PluginConfig['source']['fields'], value: string) =>
     updateSource({ fields: { ...props.config.source.fields, [key]: value } });
   const missingFields = getMissingRequiredFields(props.config.source.fields);
-  const dataRangeOptions = buildDataRangeOptions(props.dataRanges, props.config.source.dataRange);
-  const selectedDataRangeValue = getDataRangeValue(props.config.source.dataRange) ?? dataRangeOptions[0]?.value ?? '';
+  const dataRangeOptions = buildDataRangeOptions(props.dataRanges);
+  const currentDataRangeValue = getDataRangeValue(props.config.source.dataRange);
+  const selectedDataRangeValue =
+    currentDataRangeValue && dataRangeOptions.some((option) => option.value === currentDataRangeValue)
+      ? currentDataRangeValue
+      : dataRangeOptions[0]?.value ?? '';
 
   return (
     <aside className="config-panel">
@@ -207,8 +211,8 @@ function ConfigSelect(props: {
   );
 }
 
-function buildDataRangeOptions(dataRanges: IDataRange[], currentRange?: IDataRange) {
-  const ranges = dataRanges.length ? dataRanges : currentRange ? [currentRange] : [{ type: SourceType.ALL } as IDataRange];
+function buildDataRangeOptions(dataRanges: IDataRange[]) {
+  const ranges = dataRanges.length ? dataRanges : [{ type: SourceType.ALL } as IDataRange];
   return ranges.map((dataRange) => ({
     label: getDataRangeLabel(dataRange),
     value: getDataRangeValue(dataRange) ?? '',

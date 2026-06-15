@@ -446,9 +446,10 @@ export default function App() {
     const previousTableId = config.source.tableId;
     const nextTableId = nextConfig.source.tableId;
     const dataRangeChanged = !isSameDataRange(config.source.dataRange, nextConfig.source.dataRange);
+    const fieldMappingChanged = !isSameFieldMapping(config.source.fields, nextConfig.source.fields);
     setConfig(nextConfig);
     if (nextTableId === previousTableId) {
-      if (dataRangeChanged && isConfigMode) {
+      if ((dataRangeChanged || fieldMappingChanged) && isConfigMode) {
         setHostData(await runtime.getPreviewData(buildDataConditions(nextConfig)));
       }
       return;
@@ -458,6 +459,14 @@ export default function App() {
     setDataRanges([]);
     setHostData(null);
     setOptionRecords([]);
+    setConfig({
+      ...nextConfig,
+      source: {
+        ...nextConfig.source,
+        dataRange: undefined,
+        viewId: undefined,
+      },
+    });
 
     if (!nextTableId.trim()) {
       configSourceRequestId.current += 1;
@@ -670,6 +679,10 @@ function getViewIdFromDataRange(dataRange?: IDataRange): string | undefined {
 
 function isSameDataRange(left?: IDataRange, right?: IDataRange): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function isSameFieldMapping(left: FieldMapping, right: FieldMapping): boolean {
+  return Object.keys(left).every((key) => left[key as keyof FieldMapping] === right[key as keyof FieldMapping]);
 }
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {

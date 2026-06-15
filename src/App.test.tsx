@@ -231,6 +231,47 @@ describe('App initialization', () => {
     );
   });
 
+  it('refreshes preview data when a field mapping changes on the same table', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getTableList: vi.fn(async () => [{ tableId: 'table-a', tableName: '表 A' }]),
+      getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }]),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getPreviewData).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.getPreviewData).mockClear();
+
+    fireEvent.change(screen.getByDisplayValue('评论ID'), { target: { value: 'fld_a_content' } });
+
+    await waitFor(() =>
+      expect(runtime.getPreviewData).toHaveBeenCalledWith([
+        {
+          tableId: 'table-a',
+          dataRange: { type: SourceType.ALL },
+          groups: [{ fieldId: 'fld_a_content' }],
+          series: 'COUNTA',
+        },
+      ]),
+    );
+  });
+
   it('loads host data in View state and hides the config panel', async () => {
     const runtime = fakeRuntime({
       getState: () => 'View',

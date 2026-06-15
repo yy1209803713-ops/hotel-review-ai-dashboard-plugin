@@ -128,6 +128,33 @@ describe('ConfigPanel', () => {
     });
   });
 
+  it('does not fall back to an old view range when no data ranges are available', () => {
+    render(
+      <ConfigPanel
+        config={{
+          ...DEFAULT_CONFIG,
+          source: {
+            ...DEFAULT_CONFIG.source,
+            tableId: 'table-a',
+            viewId: 'old-view',
+            dataRange: { type: SourceType.VIEW, viewId: 'old-view', viewName: '旧视图' },
+          },
+        }}
+        tables={[{ tableId: 'table-a', tableName: '表 A' }]}
+        categories={[]}
+        dataRanges={[]}
+        saving={false}
+        testingConnection={false}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByDisplayValue('旧视图')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('combobox')[1]).toHaveValue('ALL');
+  });
+
   it('shows a missing field mapping list', () => {
     const config: PluginConfig = {
       ...DEFAULT_CONFIG,
