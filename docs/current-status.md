@@ -2,7 +2,7 @@
 
 ## V1.2 更新
 
-更新时间：2026-06-11
+更新时间：2026-06-15
 
 当前目录：
 
@@ -26,10 +26,12 @@ npm test -- --run
 npm run build
 ```
 
+结果：16 个测试文件、117 个测试通过；构建通过。Vite 仍提示既有 Sass deprecation 和 chunk size warning，不影响本次 Dashboard 插件合规验证。
+
 ## Dashboard Plugin UI Verification
 
-- `?state=Create`: config layout renders without horizontal overflow.
-- `?state=Config`: grouped config panel renders and save action is visible.
+- `?state=Create`: desktop 与 390px viewport 下 config layout 无横向溢出，保存操作可见。
+- `?state=Config`: grouped config panel renders and save action is visible；desktop 与 390px viewport 均无横向溢出。
 - `?state=View`: config panel is hidden.
 - `?state=FullScreen`: transparent/dark background is applied and content does not overlap.
 

@@ -1022,3 +1022,10 @@ git commit -m "docs: record dashboard plugin compliance verification"
 - Existing names preserved: `PluginConfig`, `FieldMapping`, `RuntimeConfig`, `DashboardRuntime`, `ScopeSnapshot`.
 - New names introduced consistently: `buildDataConditions`, `getPrimaryDataCondition`, `mergeConfigWithDataCondition`, `suggestFieldMapping`, `getMissingRequiredFields`.
 - `buildScopeSnapshot` signature change is explicitly covered by Task 6 and its tests.
+
+## Execution Record
+
+- 2026-06-15: Implemented Tasks 1-8 on branch `codex/feishu-dashboard-plugin-compliance`.
+- Final verification: `npm test -- --run` passed 16 test files and 117 tests.
+- Final build: `npm run build` passed; remaining output is the existing Sass deprecation warning and Vite chunk size warning.
+- Browser checks: `?state=Create`, `?state=Config`, `?state=View`, and `?state=FullScreen` were verified on desktop and 390px mobile viewport for the Task 7 UI checklist.
