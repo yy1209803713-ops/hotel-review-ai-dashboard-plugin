@@ -26,14 +26,20 @@ export function mergeConfigWithDataCondition(config: PluginConfig, dataCondition
   if (!dataCondition) {
     return config;
   }
+  const dataRange = dataCondition.dataRange ?? config.source.dataRange;
+  const viewId = dataCondition.dataRange
+    ? dataCondition.dataRange.type === SourceType.VIEW
+      ? dataCondition.dataRange.viewId
+      : undefined
+    : config.source.viewId;
 
   return {
     ...config,
     source: {
       ...config.source,
       tableId: dataCondition.tableId ?? config.source.tableId,
-      viewId: dataCondition.dataRange?.type === SourceType.VIEW ? dataCondition.dataRange.viewId : config.source.viewId,
-      dataRange: dataCondition.dataRange ?? config.source.dataRange,
+      viewId,
+      dataRange,
     },
   };
 }

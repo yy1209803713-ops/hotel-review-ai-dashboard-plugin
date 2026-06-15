@@ -31,7 +31,7 @@ export function ConfigPanel(props: {
           <ConfigSelect
             value={props.config.source.tableId}
             optionList={props.tables.map((table) => ({ label: table.tableName, value: table.tableId }))}
-            onChange={(value) => updateSource({ tableId: String(value) })}
+            onChange={(value) => updateSource({ tableId: String(value), viewId: undefined, dataRange: undefined })}
           />
         </Field>
         <div className="config-group-title">字段映射</div>

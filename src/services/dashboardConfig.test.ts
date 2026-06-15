@@ -37,6 +37,29 @@ describe('dashboardConfig', () => {
     expect(config.source.dataRange).toEqual({ type: SourceType.ALL });
   });
 
+  it('clears stale viewId when an ALL data range is merged from Dashboard config', () => {
+    const config = mergeConfigWithDataCondition(
+      {
+        ...DEFAULT_CONFIG,
+        source: {
+          ...DEFAULT_CONFIG.source,
+          tableId: 'old-table',
+          viewId: 'old-view',
+          dataRange: { type: SourceType.VIEW, viewId: 'old-view', viewName: '旧视图' },
+        },
+      },
+      {
+        tableId: 'tbl1',
+        dataRange: { type: SourceType.ALL },
+        series: 'COUNTA',
+      },
+    );
+
+    expect(config.source.tableId).toBe('tbl1');
+    expect(config.source.dataRange).toEqual({ type: SourceType.ALL });
+    expect(config.source.viewId).toBeUndefined();
+  });
+
   it('returns null for missing saved data conditions', () => {
     expect(getPrimaryDataCondition({ dataConditions: [] })).toBeNull();
   });
