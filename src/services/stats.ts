@@ -11,6 +11,11 @@ export type ScopeSnapshot = {
   totalReviews: number;
   firstRecordId: string | null;
   lastRecordId: string | null;
+  source: {
+    tableId: string;
+    dataRange?: unknown;
+    hostDataSignal?: string;
+  };
 };
 
 export function calculateOverview(records: ReviewRecord[]): OverviewMetrics {
@@ -38,6 +43,7 @@ export function buildScopeSnapshot(
   filters: FilterState,
   fields: FieldMapping,
   model: string,
+  source: ScopeSnapshot['source'],
 ): ScopeSnapshot {
   return {
     filters,
@@ -47,6 +53,7 @@ export function buildScopeSnapshot(
     totalReviews: records.length,
     firstRecordId: records[0]?.recordId ?? null,
     lastRecordId: records[records.length - 1]?.recordId ?? null,
+    source,
   };
 }
 

@@ -11,6 +11,7 @@ import { filterReviews } from './services/filtering';
 import { getMissingRequiredFields, suggestFieldMapping } from './services/fieldMapping';
 import { runAnalysis } from './services/analysisPipeline';
 import { ANALYSIS_COPY_VERSION, buildScopeSnapshot, isCacheStale, type ScopeSnapshot } from './services/stats';
+import { buildHostDataSignal, parseHostVisibleReviewIds } from './services/hostDataScope';
 import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './services/cacheStore';
 import { writeAnalysisResult } from './services/writeback';
 import { formatAiClientError, testAiConnection } from './services/aiClient';
@@ -20,6 +21,8 @@ import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysi
 
 const EVIDENCE_PAGE_SIZE = 10;
 const FILTER_OPTION_REQUIRED_FIELD_KEYS: Array<keyof FieldMapping> = ['content', 'hotelName', 'checkInMonth'];
+const HOST_DATA_SCOPE_UNSUPPORTED_MESSAGE =
+  '当前仪表盘筛选结果无法映射到评论 ID，已停止 AI 分析以避免分析到非当前范围的数据。请检查字段映射和数据源配置。';
 
 export default function App() {
   const runtime = defaultRuntime;
@@ -41,6 +44,7 @@ export default function App() {
   const [currentScope, setCurrentScope] = useState<ScopeSnapshot | null>(null);
   const [optionRecords, setOptionRecords] = useState<ReviewRecord[]>([]);
   const [hostData, setHostData] = useState<unknown[][] | null>(null);
+  const [scopeWarning, setScopeWarning] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
@@ -90,6 +94,7 @@ export default function App() {
       setCategories([]);
       setDataRanges([]);
       setHostData(null);
+      setScopeWarning(null);
       configSourceRequestId.current += 1;
 
       try {
@@ -245,6 +250,7 @@ export default function App() {
     const runStartedAt = getNowMs();
 
     setError(null);
+    setScopeWarning(null);
     const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
     if (missingFieldMessage) {
       setError(missingFieldMessage);
@@ -253,7 +259,16 @@ export default function App() {
     }
 
     if (!config.ai.apiKey.trim()) {
-      const message = '请先填写 API Key';
+      const message = '请先填写并保存 API Key';
+      setError(message);
+      Toast.error(message);
+      return;
+    }
+
+    const hostVisibleReviewIds = parseHostVisibleReviewIds(hostData);
+    if (!hostVisibleReviewIds) {
+      const message = HOST_DATA_SCOPE_UNSUPPORTED_MESSAGE;
+      setScopeWarning(message);
       setError(message);
       Toast.error(message);
       return;
@@ -268,9 +283,10 @@ export default function App() {
         detail: config.source.viewId ? `view=${config.source.viewId}` : `table=${config.source.tableId}`,
       }));
       setOptionRecords(records);
-      const filtered = measureAnalysisSyncStep(timingRows, '过滤', () => filterReviews(records, filters), (result) => ({
+      const scopedRecords = records.filter((record) => hostVisibleReviewIds.has(record.reviewId));
+      const filtered = measureAnalysisSyncStep(timingRows, '过滤', () => filterReviews(scopedRecords, filters), (result) => ({
         records: result.length,
-        detail: `原始 ${records.length} 条`,
+        detail: `仪表盘可见 ${scopedRecords.length} 条；原始 ${records.length} 条`,
       }));
 
       if (!filtered.length) {
@@ -278,7 +294,12 @@ export default function App() {
         return;
       }
 
-      const scope = buildScopeSnapshot(filtered, filters, config.source.fields, config.ai.model);
+      const sourceScope = {
+        tableId: config.source.tableId,
+        dataRange: config.source.dataRange,
+        hostDataSignal: buildHostDataSignal(hostData),
+      };
+      const scope = buildScopeSnapshot(filtered, filters, config.source.fields, config.ai.model, sourceScope);
       const result = await measureAnalysisStep(timingRows, 'AI 总耗时', () => runAnalysis({
         records: filtered,
         config: config.ai,
@@ -345,7 +366,7 @@ export default function App() {
 
   async function handleTestConnection() {
     if (!config.ai.apiKey.trim()) {
-      const message = '请先填写 API Key';
+      const message = '请先填写并保存 API Key';
       setError(message);
       Toast.error(message);
       return;
@@ -572,6 +593,11 @@ export default function App() {
         totalReviews: config.analysisCache?.result.overview.totalReviews ?? 0,
         firstRecordId: '',
         lastRecordId: '',
+        source: {
+          tableId: config.source.tableId,
+          dataRange: config.source.dataRange,
+          hostDataSignal: buildHostDataSignal(hostData),
+        },
       });
     }
   }
@@ -597,6 +623,7 @@ export default function App() {
       evidenceLoading={evidenceLoading}
       loading={loading}
       error={error}
+      scopeWarning={scopeWarning}
       stale={stale}
       onFilterChange={handleFilterChange}
       onPeriodChange={handlePeriodChange}

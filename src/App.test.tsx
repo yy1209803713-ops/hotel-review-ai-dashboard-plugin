@@ -4,10 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
 import type { RecordsPage } from './services/baseRecords';
+import type { ReviewRecord } from './types/analysis';
 import type { PluginConfig } from './types/config';
 
 const runtimeRef = vi.hoisted(() => ({
   current: undefined as DashboardRuntime | undefined,
+}));
+
+const analysisPipelineMock = vi.hoisted(() => ({
+  runAnalysis: vi.fn(),
 }));
 
 vi.mock('./runtime/sdk', () => ({
@@ -17,6 +22,10 @@ vi.mock('./runtime/sdk', () => ({
       get: (_target, prop: keyof DashboardRuntime) => runtimeRef.current?.[prop],
     },
   ),
+}));
+
+vi.mock('./services/analysisPipeline', () => ({
+  runAnalysis: analysisPipelineMock.runAnalysis,
 }));
 
 vi.mock('@douyinfe/semi-ui', () => ({
@@ -100,6 +109,7 @@ describe('App initialization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtimeRef.current = undefined;
+    analysisPipelineMock.runAnalysis.mockResolvedValue(createAnalysisResult(0));
   });
 
   afterEach(() => {
@@ -593,10 +603,12 @@ describe('App initialization', () => {
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
         dataConditions: [],
-        customConfig: withSource({
-          tableId: 'tbl1',
-          fields: optionFieldMapping('a'),
-        }),
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
       })),
       getData: vi.fn(async () => [[{ value: '1001', text: '1001', groupKey: '1001' }]]),
     });
@@ -617,10 +629,12 @@ describe('App initialization', () => {
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
         dataConditions: [],
-        customConfig: withSource({
-          tableId: 'tbl1',
-          fields: optionFieldMapping('a'),
-        }),
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
       })),
       getData: vi.fn(async () => [[{ value: 'initial', text: 'initial', groupKey: 'initial' }]]),
       onDataChange: vi.fn((handler) => {
@@ -835,10 +849,10 @@ describe('App initialization', () => {
     vi.mocked(runtime.readRecordsPage).mockClear();
 
     fireEvent.click(screen.getByText('测试连接'));
-    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith('请先填写 API Key'));
+    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith('请先填写并保存 API Key'));
 
     fireEvent.click(screen.getAllByText('更新分析')[0]);
-    await waitFor(() => expect(screen.getAllByText('请先填写 API Key').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('请先填写并保存 API Key').length).toBeGreaterThan(0));
     expect(runtime.readRecordsPage).not.toHaveBeenCalled();
   });
 
@@ -861,6 +875,87 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getAllByText(/请先完成字段映射/).length).toBeGreaterThan(0));
     expect(runtime.readRecordsPage).not.toHaveBeenCalled();
+  });
+
+  it('blocks analysis when host data cannot be mapped to review IDs', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
+      })),
+      getData: vi.fn(async () => [[{ value: '记录数', text: '记录数', groupKey: null }]]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.readRecordsPage).mockClear();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('当前仪表盘筛选结果无法映射到评论 ID，已停止 AI 分析以避免分析到非当前范围的数据。请检查字段映射和数据源配置。'),
+      ).toBeInTheDocument(),
+    );
+    expect(runtime.readRecordsPage).not.toHaveBeenCalled();
+    expect(analysisPipelineMock.runAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('limits analysis to host-visible review IDs before running AI', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+          optionRecordWithReviewId('a', 'review-hidden', '表 A 隐藏酒店', '2026-06-01 00:00:00'),
+        ],
+        hasMore: false,
+      })),
+    });
+
+    analysisPipelineMock.runAnalysis.mockResolvedValueOnce(createAnalysisResult(1));
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.readRecordsPage).mockClear();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledTimes(1));
+    expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1);
+    expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({
+        records: [expect.objectContaining({ reviewId: 'review-a' })],
+      }),
+    );
+    const [{ records }] = analysisPipelineMock.runAnalysis.mock.calls[0] as Array<{ records: ReviewRecord[] }>;
+    expect(records.map((record) => record.reviewId)).toEqual(['review-a']);
   });
 
   it('keeps the latest selected table when category requests resolve out of order', async () => {
@@ -1321,6 +1416,16 @@ function withSource(source: Partial<PluginConfig['source']>): PluginConfig {
   };
 }
 
+function withAiKey(config: PluginConfig): PluginConfig {
+  return {
+    ...config,
+    ai: {
+      ...config.ai,
+      apiKey: 'sk-test',
+    },
+  };
+}
+
 const aliasCategories: RuntimeCategory[] = [
   { fieldId: 'fld_id', fieldName: '评论ID', fieldType: 'number' },
   { fieldId: 'fld_content', fieldName: 'comment', fieldType: 'text' },
@@ -1346,10 +1451,14 @@ function optionCategories(prefix: string): RuntimeCategory[] {
 }
 
 function optionRecord(prefix: string, hotelName: string, checkInMonth: string) {
+  return optionRecordWithReviewId(prefix, `review-${prefix}`, hotelName, checkInMonth);
+}
+
+function optionRecordWithReviewId(prefix: string, reviewId: string, hotelName: string, checkInMonth: string) {
   return {
-    recordId: `rec-${prefix}`,
+    recordId: `rec-${reviewId}`,
     fields: {
-      [`fld_${prefix}_review_id`]: `review-${prefix}`,
+      [`fld_${prefix}_review_id`]: reviewId,
       [`fld_${prefix}_content`]: `${hotelName} 评论`,
       [`fld_${prefix}_hotel`]: hotelName,
       [`fld_${prefix}_score`]: 5,
@@ -1377,6 +1486,33 @@ function optionFieldMapping(prefix: string): PluginConfig['source']['fields'] {
 
 function viewDataRange(viewId: string, viewName: string) {
   return { type: SourceType.VIEW, viewId, viewName } as const;
+}
+
+function createAnalysisResult(totalReviews: number) {
+  return {
+    analysisId: 'analysis-1',
+    generatedAt: '2026-06-16T00:00:00.000Z',
+    model: DEFAULT_CONFIG.ai.model,
+    status: 'complete' as const,
+    scope: {
+      hotelName: 'all',
+      periodType: 'month',
+      startDate: '',
+      endDate: '',
+    },
+    overview: {
+      totalReviews,
+      positiveReviews: 0,
+      negativeOrRiskReviews: 0,
+      mixedReviews: 0,
+      neutralReviews: 0,
+      averageScore: null,
+      replyRate: 0,
+    },
+    positiveTopics: [],
+    negativeTopics: [],
+    actionItems: [],
+  };
 }
 
 function deferred<T>() {

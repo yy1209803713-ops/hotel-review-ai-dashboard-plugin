@@ -1,7 +1,7 @@
 import type { AnalysisResult, ReviewRecord, TopicSummary } from '../types/analysis';
 import type { FilterState, PeriodType } from '../types/config';
 import { ActionItems } from './ActionItems';
-import { EmptyState, ErrorBanner, LoadingPanel, StaleBanner } from './StateViews';
+import { EmptyState, ErrorBanner, LoadingPanel, StaleBanner, WarningBanner } from './StateViews';
 import { FilterBar } from './FilterBar';
 import { OverviewMetrics } from './OverviewMetrics';
 import { TopicEvidenceModal } from './TopicEvidenceModal';
@@ -19,6 +19,7 @@ export function DashboardShell(props: {
   evidenceLoading: boolean;
   loading: boolean;
   error: string | null;
+  scopeWarning: string | null;
   stale: boolean;
   onFilterChange: (filters: FilterState) => void;
   onPeriodChange: (periodType: PeriodType) => void;
@@ -51,6 +52,7 @@ export function DashboardShell(props: {
         />
         <div className="content">
           {props.error ? <ErrorBanner message={props.error} /> : null}
+          {props.scopeWarning && props.scopeWarning !== props.error ? <WarningBanner message={props.scopeWarning} /> : null}
           {props.stale ? <StaleBanner /> : null}
           {props.loading && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
           {props.loading && props.analysis ? <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact /> : null}

@@ -25,6 +25,10 @@ export function ErrorBanner({ message }: { message: string }) {
   return <Banner type="danger" description={message} closeIcon={null} />;
 }
 
+export function WarningBanner({ message }: { message: string }) {
+  return <Banner type="warning" description={message} closeIcon={null} />;
+}
+
 export function StaleBanner() {
   return <Banner type="warning" description="当前结果基于上次分析条件，点击更新分析生成新结果。" closeIcon={null} />;
 }

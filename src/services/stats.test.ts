@@ -77,7 +77,13 @@ describe('calculateOverview', () => {
 
 describe('scope snapshots', () => {
   it('captures filters, field mapping, model, count, and record edge IDs', () => {
-    expect(buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini')).toEqual({
+    expect(
+      buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini', {
+        tableId: 'tbl1',
+        dataRange: { type: 'ALL' },
+        hostDataSignal: 'host-count:3',
+      }),
+    ).toEqual({
       filters,
       fields,
       model: 'gpt-4o-mini',
@@ -85,17 +91,44 @@ describe('scope snapshots', () => {
       totalReviews: 3,
       firstRecordId: 'rec1',
       lastRecordId: 'rec3',
+      source: {
+        tableId: 'tbl1',
+        dataRange: { type: 'ALL' },
+        hostDataSignal: 'host-count:3',
+      },
     });
   });
 
-  it('detects stale cache when filters change', () => {
-    const cached = buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini');
+  it('detects stale cache when the source view changes', () => {
+    const cached = buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini', {
+      tableId: 'tbl1',
+      dataRange: { type: 'VIEW', viewId: 'view-a' },
+    });
     const current = buildScopeSnapshot(
       records,
-      { ...filters, keyword: '早餐' },
+      filters,
       fields,
       'gpt-4o-mini',
+      {
+        tableId: 'tbl1',
+        dataRange: { type: 'VIEW', viewId: 'view-b' },
+      },
     );
+
+    expect(isCacheStale(cached, current)).toBe(true);
+  });
+
+  it('detects stale cache when host data scope changes', () => {
+    const cached = buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini', {
+      tableId: 'tbl1',
+      dataRange: { type: 'ALL' },
+      hostDataSignal: 'host-visible-review-ids:1001|1002',
+    });
+    const current = buildScopeSnapshot(records, filters, fields, 'gpt-4o-mini', {
+      tableId: 'tbl1',
+      dataRange: { type: 'ALL' },
+      hostDataSignal: 'host-visible-review-ids:1001|1003',
+    });
 
     expect(isCacheStale(cached, current)).toBe(true);
   });
