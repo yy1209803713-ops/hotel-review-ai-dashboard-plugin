@@ -11,6 +11,11 @@ export function parseHostVisibleReviewIds(data: unknown): Set<string> | null {
     return null;
   }
 
+  const headerRow = data[0];
+  if (!Array.isArray(headerRow) || !isReviewIdGroupedHeader(headerRow[0] as HostDataItem | undefined)) {
+    return null;
+  }
+
   const ids = new Set<string>();
   for (const row of data.slice(1)) {
     if (!Array.isArray(row)) {
@@ -18,7 +23,7 @@ export function parseHostVisibleReviewIds(data: unknown): Set<string> | null {
     }
 
     const firstCell = row[0] as HostDataItem | undefined;
-    const rawId = firstCell?.groupKey;
+    const rawId = firstCell?.groupKey ?? firstCell?.text ?? firstCell?.value;
     if (rawId === null || rawId === undefined || String(rawId).trim() === '') {
       return null;
     }
@@ -34,4 +39,14 @@ export function buildHostDataSignal(data: unknown): string {
     return 'host-data-unsupported';
   }
   return `host-visible-review-ids:${Array.from(ids).sort().join('|')}`;
+}
+
+function isReviewIdGroupedHeader(cell: HostDataItem | undefined): boolean {
+  const label = cell?.text ?? cell?.value;
+  if (label === null || label === undefined) {
+    return false;
+  }
+
+  const normalized = String(label).replace(/\s+/g, '').toLowerCase();
+  return normalized.includes('id');
 }

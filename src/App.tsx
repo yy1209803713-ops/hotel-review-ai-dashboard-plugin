@@ -67,6 +67,17 @@ export default function App() {
         return;
       }
       setHostData(data);
+      setCurrentScope((current) =>
+        current
+          ? {
+              ...current,
+              source: {
+                ...current.source,
+                hostDataSignal: buildHostDataSignal(data),
+              },
+            }
+          : current,
+      );
       runtime.setRendered();
     });
     const unsubscribeConfig = runtime.onConfigChange(() => {
