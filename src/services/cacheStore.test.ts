@@ -250,6 +250,7 @@ function fakeRuntime(
     canEditBase: vi.fn(),
     addTable: vi.fn(),
     addRecords: vi.fn(),
+    setRecords: vi.fn(),
     setRendered: vi.fn(),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
   };

@@ -958,6 +958,97 @@ describe('App initialization', () => {
     expect(records.map((record) => record.reviewId)).toEqual(['review-a']);
   });
 
+  it('uses cached first-stage evidence and sends only cache misses to AI analysis', async () => {
+    const sourceRecords = [
+      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+      optionRecordWithReviewId('a', 'review-b', '表 A 酒店', '2026-06-02 00:00:00'),
+    ];
+    const cachedContent = String(sourceRecords[0].fields.fld_a_content);
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
+      ]),
+      getTableList: vi.fn(async () => [
+        { tableId: 'tbl1', tableName: '酒店评论' },
+        { tableId: 'cache-table', tableName: 'AI评论证据缓存' },
+      ]),
+      getFieldMetaList: vi.fn(async (tableId: string) =>
+        tableId === 'cache-table'
+          ? evidenceCacheFieldNames.map((fieldName) => ({
+              fieldId: `cache-${fieldName}`,
+              fieldName,
+              fieldType: 'text',
+            }))
+          : [],
+      ),
+      readRecordsPage: vi.fn(async (tableId: string) => {
+        if (tableId === 'cache-table') {
+          return {
+            records: [
+              {
+                recordId: 'cache-row-a',
+                fields: {
+                  'cache-数据表 ID': 'tbl1',
+                  'cache-评论 recordId': 'rec-review-a',
+                  'cache-评论内容 hash': await hashFor(cachedContent),
+                  'cache-模型': DEFAULT_CONFIG.ai.model,
+                  'cache-抽取规则版本': 'evidence-v1.2',
+                  'cache-证据 JSON': JSON.stringify([
+                    {
+                      recordId: 'rec-review-a',
+                      quote: cachedContent,
+                      sentiment: 'positive',
+                      aspectLabel: '缓存证据',
+                    },
+                  ]),
+                },
+              },
+            ],
+            hasMore: false,
+          };
+        }
+        return {
+          records: sourceRecords,
+          hasMore: false,
+        };
+      }),
+    });
+
+    analysisPipelineMock.runAnalysis.mockResolvedValueOnce(createAnalysisResult(2));
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    vi.mocked(runtime.readRecordsPage).mockClear();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledTimes(1));
+    expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cachedEvidenceItems: [
+          expect.objectContaining({
+            recordId: 'rec-review-a',
+            aspectLabel: '缓存证据',
+          }),
+        ],
+        cacheMissRecords: [expect.objectContaining({ recordId: 'rec-review-b' })],
+      }),
+    );
+  });
+
   it('marks cached analysis stale when Dashboard host data changes', async () => {
     let dataChangeHandler: ((data: unknown[][]) => void) | undefined;
     const runtime = fakeRuntime({
@@ -1622,14 +1713,23 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
     onDataChange: vi.fn(() => () => undefined),
     onConfigChange: vi.fn(() => () => undefined),
     getTableList: vi.fn(async () => [{ tableId: 'tbl1', tableName: '酒店评论' }]),
-    getFieldMetaList: vi.fn(),
+    getFieldMetaList: vi.fn(async (tableId: string) =>
+      tableId === 'cache-table'
+        ? evidenceCacheFieldNames.map((fieldName) => ({
+            fieldId: `cache-${fieldName}`,
+            fieldName,
+            fieldType: 'text',
+          }))
+        : [],
+    ),
     getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }]),
     getCategories: vi.fn(async () => []),
     readRecordsPage: vi.fn(),
     readRecordsByIds: vi.fn(),
     canEditBase: vi.fn(),
-    addTable: vi.fn(),
-    addRecords: vi.fn(),
+    addTable: vi.fn(async () => ({ tableId: 'cache-table' })),
+    addRecords: vi.fn(async (_tableId, records) => records.map((_, index) => `write-${index}`)),
+    setRecords: vi.fn(async (_tableId, records) => records.map((record) => ({ recordId: record.recordId }))),
     setRendered: vi.fn(async () => true),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
     ...overrides,
@@ -1748,6 +1848,22 @@ function createAnalysisResult(totalReviews: number) {
     actionItems: [],
   };
 }
+
+async function hashFor(content: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+const evidenceCacheFieldNames = [
+  '数据表 ID',
+  '评论 recordId',
+  '评论内容 hash',
+  '模型',
+  '抽取规则版本',
+  '证据 JSON',
+  '更新时间',
+  '最近使用时间',
+];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

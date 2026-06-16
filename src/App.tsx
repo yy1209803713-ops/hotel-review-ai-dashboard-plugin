@@ -9,12 +9,13 @@ import { getPeriodRange } from './services/filtering';
 import { normalizeReviewRecord, readReviewRecords } from './services/baseRecords';
 import { filterReviews } from './services/filtering';
 import { getMissingRequiredFields, suggestFieldMapping } from './services/fieldMapping';
-import { runAnalysis } from './services/analysisPipeline';
+import { runAnalysis, type AnalysisCacheUsage } from './services/analysisPipeline';
 import { ANALYSIS_COPY_VERSION, buildScopeSnapshot, isCacheStale, type ScopeSnapshot } from './services/stats';
 import { buildHostDataSignal, parseHostVisibleReviewIds } from './services/hostDataScope';
 import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './services/cacheStore';
 import { writeAnalysisResult } from './services/writeback';
 import { formatAiClientError, testAiConnection } from './services/aiClient';
+import { readEvidenceCache, saveEvidenceCacheEntries, touchEvidenceCacheEntries } from './services/evidenceCache';
 import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
 import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
@@ -343,11 +344,40 @@ export default function App() {
 
       const sourceScope = buildCurrentSourceScope(config, hostData);
       const scope = buildScopeSnapshot(filtered, filters, config.source.fields, config.ai.model, sourceScope);
+      const evidenceCache = await measureAnalysisStep(timingRows, '读取证据缓存', () => readEvidenceCache(runtime, {
+        tableId: config.source.tableId,
+        model: config.ai.model,
+        records: filtered,
+      }), (cache) => ({
+        records: cache.hits.length,
+        detail: `命中 ${cache.hits.length} 条；待分析 ${cache.misses.length} 条`,
+      }));
+      logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_READ__', {
+        scope: {
+          hotelName: filters.hotelName,
+          periodType: filters.periodType,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+        },
+        diagnostics: evidenceCache.diagnostics,
+      });
+      if (evidenceCache.tableId && evidenceCache.hits.length) {
+        touchEvidenceCacheEntries(runtime, {
+          cacheTableId: evidenceCache.tableId,
+          cacheRecordIds: evidenceCache.hits.map((hit) => hit.cacheRecordId),
+        });
+      }
+      let newEvidenceItems: AnalysisCacheUsage['newEvidenceItems'] = [];
       const result = await measureAnalysisStep(timingRows, 'AI 总耗时', () => runAnalysis({
         records: filtered,
         config: config.ai,
         filters,
         fields: config.source.fields,
+        cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
+        cacheMissRecords: evidenceCache.misses,
+        onCacheUsage: (usage) => {
+          newEvidenceItems = usage.newEvidenceItems;
+        },
         onBatchTiming: (timing) => {
           timingRows.push({
             step: `AI 批次 ${timing.batchIndex + 1}/${timing.batchCount}`,
@@ -356,10 +386,52 @@ export default function App() {
             records: timing.recordCount,
           });
         },
+        onStageTiming: (timing) => {
+          timingRows.push(timing);
+        },
       }), (result) => ({
         records: result.overview.totalReviews,
-        detail: `model=${result.model}`,
+        detail: `model=${result.model}; 缓存命中 ${evidenceCache.hits.length} 条；新分析 ${evidenceCache.misses.length} 条`,
       }));
+      logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_USAGE__', {
+        cachedEvidenceCount: evidenceCache.hits.reduce((sum, hit) => sum + hit.evidenceItems.length, 0),
+        cachedRecordCount: evidenceCache.hits.length,
+        analyzedRecordCount: evidenceCache.misses.length,
+        analyzedRecordIds: evidenceCache.misses.map((record) => record.recordId),
+        newEvidenceCount: newEvidenceItems.length,
+        newEvidenceRecordIds: newEvidenceItems.map((item) => item.recordId),
+      });
+      if (evidenceCache.misses.length) {
+        try {
+          await measureAnalysisStep(timingRows, '保存证据缓存', () => saveEvidenceCacheEntries(runtime, {
+            tableId: config.source.tableId,
+            model: config.ai.model,
+            records: evidenceCache.misses,
+            evidenceItems: newEvidenceItems,
+          }), () => ({
+            records: evidenceCache.misses.length,
+          }));
+          logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE__', {
+            tableId: config.source.tableId,
+            cacheTableId: evidenceCache.tableId ?? null,
+            savedRecords: evidenceCache.misses.length,
+            savedEvidenceItems: newEvidenceItems.length,
+          });
+        } catch (evidenceCacheError) {
+          logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE_FAIL__', {
+            tableId: config.source.tableId,
+            cacheTableId: evidenceCache.tableId ?? null,
+            savedRecords: evidenceCache.misses.length,
+            savedEvidenceItems: newEvidenceItems.length,
+            error: evidenceCacheError instanceof Error ? evidenceCacheError.message : String(evidenceCacheError),
+          });
+          Toast.warning(
+            evidenceCacheError instanceof Error
+              ? `证据缓存保存失败：${evidenceCacheError.message}`
+              : '证据缓存保存失败，本次结果已保留',
+          );
+        }
+      }
       const cache: AnalysisCache = {
         result,
         scopeSnapshot: scope,
@@ -367,6 +439,12 @@ export default function App() {
         model: config.ai.model,
         generatedAt: result.generatedAt,
       };
+      logAnalysisDebug('__HOTEL_REVIEW_AI_ANALYSIS_CACHE_SIZE__', {
+        jsonBytes: new TextEncoder().encode(JSON.stringify(cache)).length,
+        resultBytes: new TextEncoder().encode(JSON.stringify(result)).length,
+        scopeSnapshotBytes: new TextEncoder().encode(JSON.stringify(scope)).length,
+        sourceSnapshotBytes: new TextEncoder().encode(JSON.stringify(config.source)).length,
+      });
 
       await measureAnalysisStep(timingRows, '保存缓存', () => saveAnalysisCache(runtime, cache));
       try {
@@ -962,10 +1040,18 @@ function publishAnalysisTimingReport(rows: AnalysisTimingRow[], totalMs: number)
     console.info(tableRows);
   }
   console.info('__HOTEL_REVIEW_AI_LAST_TIMING__', report);
+  console.info('__HOTEL_REVIEW_AI_TIMING_JSON__', JSON.stringify(report));
 
   if (hasGroup) {
     console.groupEnd();
   }
+}
+
+function logAnalysisDebug(label: string, payload: unknown): void {
+  if (typeof console === 'undefined') {
+    return;
+  }
+  console.info(label, JSON.stringify(payload));
 }
 
 function getNowMs(): number {

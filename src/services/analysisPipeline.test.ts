@@ -266,7 +266,7 @@ describe('runAnalysis', () => {
 
     await runAnalysis({
       records,
-      config,
+      config: { ...config, topN: 10 },
       filters,
       fields,
       now: '2026-06-03T12:00:00+08:00',
@@ -293,6 +293,122 @@ describe('runAnalysis', () => {
         status: 'success',
       },
     ]);
+  });
+
+  it('reports timing for major analysis stages around batch extraction and topic merge', async () => {
+    const stages: Array<{
+      step: string;
+      durationMs: number;
+      status: string;
+      records?: number;
+      detail?: string;
+    }> = [];
+    const nowValues = [100, 145, 200, 260, 300, 325];
+
+    await runAnalysis({
+      records,
+      config: { ...config, topN: 10 },
+      filters,
+      fields,
+      now: '2026-06-03T12:00:00+08:00',
+      nowMs: () => nowValues.shift() ?? 0,
+      onStageTiming: (stage) => {
+        stages.push(stage);
+      },
+      analyzeBatchImpl: async () => ({
+        evidenceItems: [
+          evidence('rec1', '位置很好', 'positive', '位置便利'),
+          evidence('rec2', '隔音不好', 'negative', '隔音问题'),
+        ],
+      }),
+      mergeTopicsImpl: async ({ candidates }) => ({
+        groups: candidates.map((candidate) => ({
+          mergeKey: candidate.sourceLabel,
+          sentiment: candidate.sentiment,
+          category: candidate.sourceLabel,
+          displayTopic: candidate.sourceLabel,
+          summary: `${candidate.sourceLabel} summary`,
+          members: [
+            {
+              sourceLabel: candidate.sourceLabel,
+              acceptedQuotes: candidate.quotes,
+            },
+          ],
+        })),
+      }),
+    });
+
+    expect(stages).toEqual([
+      {
+        step: 'AI 抽取证据',
+        durationMs: 160,
+        status: 'success',
+        records: 3,
+        detail: '批次 2；新增证据 4 条',
+      },
+      {
+        step: 'AI 合并主题',
+        durationMs: 25,
+        status: 'success',
+        records: 2,
+        detail: '候选主题 2 个；合并主题 2 个',
+      },
+      {
+        step: '本地汇总主题',
+        durationMs: 0,
+        status: 'success',
+        records: 3,
+        detail: '有效证据 2 条；好评主题 1 个；风险主题 1 个',
+      },
+    ]);
+  });
+
+  it('reuses cached first-stage evidence and analyzes only cache misses', async () => {
+    const seenRecords: string[] = [];
+    const result = await runAnalysis({
+      records,
+      config,
+      filters,
+      fields,
+      now: '2026-06-03T12:00:00+08:00',
+      cachedEvidenceItems: [evidence('rec1', '位置很好', 'positive', '地理位置优越')],
+      cacheMissRecords: records.filter((record) => record.recordId !== 'rec1'),
+      analyzeBatchImpl: async ({ records }) => {
+        seenRecords.push(...records.map((record) => record.recordId));
+        return {
+          evidenceItems: [
+            evidence('rec2', '隔音不好', 'negative', '隔音问题'),
+            evidence('rec3', '服务好', 'positive', '服务体验'),
+          ],
+        };
+      },
+      mergeTopicsImpl: async ({ candidates }) => ({
+        groups: candidates.map((candidate) => ({
+          mergeKey: candidate.sourceLabel,
+          sentiment: candidate.sentiment,
+          category: candidate.sentiment === 'positive' ? '正向体验' : '风险体验',
+          displayTopic: candidate.sourceLabel,
+          summary: `${candidate.sourceLabel} summary`,
+          members: [
+            {
+              sourceLabel: candidate.sourceLabel,
+              acceptedQuotes: candidate.quotes,
+            },
+          ],
+        })),
+      }),
+    });
+
+    expect(seenRecords).toEqual(['rec2', 'rec3']);
+    expect(result.positiveTopics.map((topic) => topic.displayTopic)).toEqual(['地理位置优越']);
+    expect(result.negativeTopics[0]).toMatchObject({
+      displayTopic: '隔音问题',
+      commentRecordIds: ['rec2'],
+    });
+    expect(result.overview).toMatchObject({
+      positiveReviews: 2,
+      negativeOrRiskReviews: 1,
+    });
   });
 });
 

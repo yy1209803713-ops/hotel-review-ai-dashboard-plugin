@@ -25,6 +25,13 @@ export type MergeTopicsImpl = (params: {
   topN: number;
 }) => Promise<TopicMergeResult>;
 
+export type AnalysisCacheUsage = {
+  cachedEvidenceCount: number;
+  cachedRecordCount: number;
+  analyzedRecordCount: number;
+  newEvidenceItems: TopicEvidenceItem[];
+};
+
 type SourceTopicMapping = {
   sourceLabel: string;
   sentiment: TopicEvidenceItem['sentiment'];
@@ -44,7 +51,15 @@ export type AnalysisBatchTiming = {
   status: 'success' | 'error';
 };
 
-export async function runAnalysis(params: {
+export type AnalysisStageTiming = {
+  step: 'AI 抽取证据' | 'AI 合并主题' | '本地汇总主题';
+  durationMs: number;
+  status: 'success' | 'error';
+  records?: number;
+  detail?: string;
+};
+
+type RunAnalysisParams = {
   records: ReviewRecord[];
   config: AiConfig;
   filters: FilterState;
@@ -52,33 +67,117 @@ export async function runAnalysis(params: {
   now?: string;
   nowMs?: () => number;
   onBatchTiming?: (timing: AnalysisBatchTiming) => void;
+  onStageTiming?: (timing: AnalysisStageTiming) => void;
+  cachedEvidenceItems?: TopicEvidenceItem[];
+  cacheMissRecords?: ReviewRecord[];
+  onCacheUsage?: (usage: AnalysisCacheUsage) => void;
   analyzeBatchImpl?: AnalyzeBatchImpl;
   mergeTopicsImpl?: MergeTopicsImpl;
-}): Promise<AnalysisResult> {
+};
+
+export async function runAnalysis(params: RunAnalysisParams): Promise<AnalysisResult> {
   const analyze = params.analyzeBatchImpl ?? ((input) => analyzeBatch(input));
   const mergeTopics =
     params.mergeTopicsImpl ??
     (params.analyzeBatchImpl ? localMergeTopics : ((input) => mergeEvidenceTopics(input)));
-  const batches = chunk(params.records, params.config.maxBatchSize);
-  const batchResults = await analyzeBatches({
-    batches,
-    config: params.config,
-    analyze,
-    concurrency: params.config.batchConcurrency,
-    nowMs: params.nowMs,
-    onBatchTiming: params.onBatchTiming,
+  const recordsToAnalyze = params.cacheMissRecords ?? params.records;
+  const batches = chunk(recordsToAnalyze, params.config.maxBatchSize);
+  const nowMs = params.nowMs ?? defaultNowMs;
+  const extractionStartedAt = params.onStageTiming ? nowMs() : 0;
+  let newEvidenceItems: TopicEvidenceItem[];
+
+  try {
+    const batchResults = await analyzeBatches({
+      batches,
+      config: params.config,
+      analyze,
+      concurrency: params.config.batchConcurrency,
+      nowMs,
+      onBatchTiming: params.onBatchTiming,
+    });
+
+    newEvidenceItems = batchResults.flatMap(extractEvidenceItems);
+    if (params.onStageTiming) {
+      params.onStageTiming({
+        step: 'AI 抽取证据',
+        durationMs: roundDuration(nowMs() - extractionStartedAt),
+        status: 'success',
+        records: recordsToAnalyze.length,
+        detail: `批次 ${batches.length}；新增证据 ${newEvidenceItems.length} 条`,
+      });
+    }
+  } catch (cause) {
+    if (params.onStageTiming) {
+      params.onStageTiming({
+        step: 'AI 抽取证据',
+        durationMs: roundDuration(nowMs() - extractionStartedAt),
+        status: 'error',
+        records: recordsToAnalyze.length,
+        detail: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+    throw cause;
+  }
+
+  return finishAnalysis({
+    params,
+    mergeTopics,
+    newEvidenceItems,
+    cachedEvidenceItems: params.cachedEvidenceItems ?? [],
+    nowMs,
+  });
+}
+
+async function finishAnalysis(input: {
+  params: RunAnalysisParams;
+  mergeTopics: MergeTopicsImpl;
+  newEvidenceItems: TopicEvidenceItem[];
+  cachedEvidenceItems: TopicEvidenceItem[];
+  nowMs: () => number;
+}): Promise<AnalysisResult> {
+  const { params, mergeTopics, newEvidenceItems, cachedEvidenceItems, nowMs } = input;
+  const recordsToAnalyze = params.cacheMissRecords ?? params.records;
+  params.onCacheUsage?.({
+    cachedEvidenceCount: cachedEvidenceItems.length,
+    cachedRecordCount: unique(cachedEvidenceItems.map((item) => item.recordId)).length,
+    analyzedRecordCount: recordsToAnalyze.length,
+    newEvidenceItems,
   });
 
-  const validatedEvidence = validateEvidenceItems(batchResults.flatMap(extractEvidenceItems), params.records);
+  const validatedEvidence = validateEvidenceItems([...cachedEvidenceItems, ...newEvidenceItems], params.records);
   const candidates = buildMergeCandidates(validatedEvidence);
-  const mergeResult = candidates.length
-    ? await mergeCandidateTopicsBySentiment({
-        config: params.config,
-        candidates,
-        topN: params.config.topN,
-        mergeTopics,
-      })
-    : { groups: [] };
+  const mergeStartedAt = params.onStageTiming ? nowMs() : 0;
+  let mergeResult: TopicMergeResult;
+  try {
+    mergeResult = candidates.length
+      ? await mergeCandidateTopicsBySentiment({
+          config: params.config,
+          candidates,
+          topN: params.config.topN,
+          mergeTopics,
+        })
+      : { groups: [] };
+    if (params.onStageTiming) {
+      params.onStageTiming({
+        step: 'AI 合并主题',
+        durationMs: roundDuration(nowMs() - mergeStartedAt),
+        status: 'success',
+        records: validatedEvidence.length,
+        detail: `候选主题 ${candidates.length} 个；合并主题 ${mergeResult.groups.length} 个`,
+      });
+    }
+  } catch (cause) {
+    if (params.onStageTiming) {
+      params.onStageTiming({
+        step: 'AI 合并主题',
+        durationMs: roundDuration(nowMs() - mergeStartedAt),
+        status: 'error',
+        records: validatedEvidence.length,
+        detail: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+    throw cause;
+  }
   debugLog('analysis.merge-result', {
     candidateCount: candidates.length,
     rawGroups: mergeResult.groups.map((group) => ({
@@ -94,6 +193,7 @@ export async function runAnalysis(params: {
       })),
     })),
   });
+  const summaryStartedAt = params.onStageTiming ? nowMs() : 0;
   const { positiveTopics, negativeTopics } = buildTopicSummaries(validatedEvidence, candidates, mergeResult.groups);
 
   const sortedPositive = sortAndLimit(positiveTopics, params.config.topN);
@@ -112,6 +212,15 @@ export async function runAnalysis(params: {
   overview.negativeOrRiskReviews = negativeReviewIds.size;
   overview.mixedReviews = mixedReviewIds.size;
   overview.neutralReviews = Math.max(0, params.records.length - mentionedReviewIds.size);
+  if (params.onStageTiming) {
+    params.onStageTiming({
+      step: '本地汇总主题',
+      durationMs: roundDuration(nowMs() - summaryStartedAt),
+      status: 'success',
+      records: params.records.length,
+      detail: `有效证据 ${validatedEvidence.length} 条；好评主题 ${sortedPositive.length} 个；风险主题 ${sortedNegative.length} 个`,
+    });
+  }
 
   return {
     analysisId: createAnalysisId(params.now),

@@ -76,6 +76,7 @@ function fakeRuntime(options: { canEdit?: boolean; tables?: RuntimeTable[] } = {
       return { tableId };
     }),
     addRecords: vi.fn(async (_tableId, records) => records.map((_, index) => `rec-write-${index}`)),
+    setRecords: vi.fn(async (_tableId, records) => records.map((record) => ({ recordId: record.recordId }))),
     setRendered: vi.fn(),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
   };

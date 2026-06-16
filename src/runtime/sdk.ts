@@ -64,6 +64,7 @@ export type DashboardRuntime = {
   canEditBase(): Promise<boolean>;
   addTable(name: string, fields: unknown[]): Promise<{ tableId: string }>;
   addRecords(tableId: string, records: Array<{ fields: Record<string, unknown> }>): Promise<string[]>;
+  setRecords(tableId: string, records: Array<{ recordId: string; fields: Record<string, unknown> }>): Promise<unknown[]>;
   setRendered(): Promise<boolean>;
   getInstanceId(): Promise<string>;
 };
@@ -148,6 +149,7 @@ export function createFixtureRuntime(
     canEditBase: async () => true,
     addTable: async (name) => ({ tableId: `fixture-${name}` }),
     addRecords: async (_tableId, records) => records.map((_, index) => `fixture-write-${index}`),
+    setRecords: async (_tableId, records) => records.map((record) => ({ recordId: record.recordId })),
     setRendered: async () => true,
     getInstanceId: async () => 'fixture-instance',
   };
@@ -328,6 +330,10 @@ export function createLarkRuntime(): DashboardRuntime {
     addRecords: async (tableId, records) => {
       const table = await bitable.base.getTableById(tableId);
       return table.addRecords(records as never);
+    },
+    setRecords: async (tableId, records) => {
+      const table = await bitable.base.getTableById(tableId);
+      return table.setRecords(records as never);
     },
     setRendered: () => dashboard.setRendered(),
     getInstanceId: () => bridge.getInstanceId(),
