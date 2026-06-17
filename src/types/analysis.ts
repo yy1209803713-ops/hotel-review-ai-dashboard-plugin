@@ -32,6 +32,7 @@ export type TopicEvidenceItem = {
 };
 
 export type TopicMergeCandidate = {
+  id?: string;
   sourceLabel: string;
   sentiment: TopicSentiment;
   count: number;
@@ -39,8 +40,9 @@ export type TopicMergeCandidate = {
 };
 
 export type TopicMergeMember = {
+  candidateId?: string;
   sourceLabel: string;
-  acceptedQuotes: string[];
+  acceptedQuotes?: string[];
 };
 
 export type TopicMergeGroup = {

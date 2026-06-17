@@ -225,6 +225,9 @@ describe('analyzeBatch', () => {
     const prompt = body.messages.map((message) => message.content).join('\n');
     expect(prompt).toContain('禁止返回 neutral');
     expect(prompt).toContain('无明确正负倾向');
+    expect(prompt).toContain('不算太远');
+    expect(prompt).toContain('不能仅凭“不算”判为 negative');
+    expect(prompt).toContain('赶车需要提前规划');
   });
 
   it('merges evidence candidates into topic groups with separate category, merge key, and display topic', async () => {
@@ -235,17 +238,109 @@ describe('analyzeBatch', () => {
             {
               message: {
                 content: JSON.stringify({
-                  groups: [
+                  topicGroups: [
                     {
+                      groupId: 'g1',
                       mergeKey: '位置便利',
                       sentiment: 'positive',
                       category: '位置',
                       displayTopic: '地理位置好，出行方便',
                       summary: '客人认可位置便利。',
+                    },
+                  ],
+                  assignments: [
+                    {
+                      candidateId: 'c001',
+                      groupId: 'g1',
+                      acceptedQuotes: ['位置很好'],
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await mergeEvidenceTopics({
+      config,
+      topN: 10,
+      candidates: [
+        {
+          id: 'c001',
+          sourceLabel: '地理位置优越',
+          sentiment: 'positive',
+          count: 2,
+          quotes: ['位置很好', '雪花酥很好吃'],
+        },
+      ],
+      fetchImpl,
+    });
+
+    expect(result.groups[0]).toMatchObject({
+      mergeKey: '位置便利',
+      category: '位置',
+      displayTopic: '地理位置好，出行方便',
+      members: [
+        {
+          candidateId: 'c001',
+          sourceLabel: '地理位置优越',
+          acceptedQuotes: ['位置很好'],
+        },
+      ],
+    });
+
+    expect(fetchImpl).toHaveBeenCalled();
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = body.messages.map((message) => message.content).join('\n');
+    const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')?.content ?? '{}') as {
+      candidates: Array<{ id?: string; sourceLabel: string }>;
+    };
+    expect(userPrompt.candidates[0]).toMatchObject({ id: 'c001', sourceLabel: '地理位置优越' });
+    expect(prompt).toContain('displayTopic');
+    expect(prompt).toContain('mergeKey');
+    expect(prompt).toContain('candidateId');
+    expect(prompt).toContain('category 是上位类目');
+    expect(prompt).toContain('sentiment 只能是 positive 或 negative，其他一律不允许');
+    expect(prompt).toContain('禁止返回 mixed、neutral、both、ambivalent');
+    expect(prompt).toContain('混合证据按主导方向归类');
+    expect(prompt).toContain('topicGroups + assignments');
+    expect(prompt).toContain('优先返回 topicGroups+assignments');
+    expect(prompt).toContain('assignments');
+    expect(prompt).toContain('assignments.length 必须等于 candidateIds.length');
+    expect(prompt).toContain('输出前逐一核对 candidateIds');
+    expect(prompt).toContain('即使某个 candidate 看起来像弱负面');
+    expect(prompt).toContain('positive candidate 必须分配到 positive topicGroup');
+    expect(prompt).toContain('negative candidate 必须分配到 negative topicGroup');
+    expect(prompt).not.toContain('请输出 groups');
+    expect(prompt).toContain('地理位置好，出行方便');
+    expect(prompt).toContain('卫生做得很好，打扫得很及时');
+  });
+
+  it('prompts topic merge as full coverage mapping instead of TopN filtering and accepts omitted quotes', async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  groups: [
+                    {
+                      mergeKey: '服务响应',
+                      sentiment: 'positive',
+                      category: '服务',
+                      displayTopic: '服务响应快，沟通顺畅',
+                      summary: '客人认可服务响应速度。',
                       members: [
                         {
-                          sourceLabel: '地理位置优越',
-                          acceptedQuotes: ['位置很好'],
+                          candidateId: 'c001',
+                          sourceLabel: '服务响应速度',
                         },
                       ],
                     },
@@ -264,43 +359,200 @@ describe('analyzeBatch', () => {
       topN: 10,
       candidates: [
         {
-          sourceLabel: '地理位置优越',
+          id: 'c001',
+          sourceLabel: '服务响应速度',
           sentiment: 'positive',
           count: 2,
-          quotes: ['位置很好', '雪花酥很好吃'],
+          quotes: ['响应很快', '沟通顺畅'],
         },
       ],
       fetchImpl,
     });
 
-    expect(result.groups[0]).toMatchObject({
-      mergeKey: '位置便利',
-      category: '位置',
-      displayTopic: '地理位置好，出行方便',
-      members: [
-        {
-          sourceLabel: '地理位置优越',
-          acceptedQuotes: ['位置很好'],
-        },
-      ],
+    expect(result.groups[0].members[0]).toEqual({
+      candidateId: 'c001',
+      sourceLabel: '服务响应速度',
     });
 
-    expect(fetchImpl).toHaveBeenCalled();
     const [, init] = fetchImpl.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     const body = JSON.parse(init.body as string) as {
       messages: Array<{ role: string; content: string }>;
     };
     const prompt = body.messages.map((message) => message.content).join('\n');
-    expect(prompt).toContain('displayTopic');
-    expect(prompt).toContain('mergeKey');
-    expect(prompt).toContain('category 是上位类目');
-    expect(prompt).toContain('sentiment 只能是 positive 或 negative，其他一律不允许');
-    expect(prompt).toContain('禁止返回 mixed、neutral、both、ambivalent');
-    expect(prompt).toContain('混合证据按主导方向归类');
-    expect(prompt).toContain('请输出 groups');
-    expect(prompt).not.toContain('topicGroups');
-    expect(prompt).toContain('地理位置好，出行方便');
-    expect(prompt).toContain('卫生做得很好，打扫得很及时');
+    const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')?.content ?? '{}') as {
+      candidateIds?: string[];
+    };
+    expect(userPrompt.candidateIds).toEqual(['c001']);
+    expect(prompt).toContain('不是筛选 TopN');
+    expect(prompt).toContain('TopN 只由程序后续排序截断');
+    expect(prompt).toContain('acceptedQuotes 可以省略');
+  });
+
+  it('accepts flat topic mappings and groups them locally by merge key', async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  mappings: [
+                    {
+                      candidateId: 'c001',
+                      sourceLabel: '房间空间',
+                      sentiment: 'positive',
+                      mergeKey: '房间空间采光',
+                      category: '房型',
+                      displayTopic: '房间宽敞，采光也好',
+                      summary: '客人认可房间空间和采光。',
+                      acceptedQuotes: ['房间很大'],
+                    },
+                    {
+                      candidateId: 'c002',
+                      sourceLabel: '房间采光',
+                      sentiment: 'positive',
+                      mergeKey: '房间空间采光',
+                      category: '房型',
+                      displayTopic: '房间宽敞，采光也好',
+                      summary: '客人认可房间空间和采光。',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await mergeEvidenceTopics({
+      config,
+      topN: 10,
+      candidates: [
+        {
+          id: 'c001',
+          sourceLabel: '房间空间',
+          sentiment: 'positive',
+          count: 1,
+          quotes: ['房间很大'],
+        },
+        {
+          id: 'c002',
+          sourceLabel: '房间采光',
+          sentiment: 'positive',
+          count: 1,
+          quotes: ['采光很好'],
+        },
+      ],
+      fetchImpl,
+    });
+
+    expect(result.groups).toEqual([
+      {
+        mergeKey: '房间空间采光',
+        sentiment: 'positive',
+        category: '房型',
+        displayTopic: '房间宽敞，采光也好',
+        summary: '客人认可房间空间和采光。',
+        action: undefined,
+        members: [
+          {
+            candidateId: 'c001',
+            sourceLabel: '房间空间',
+            acceptedQuotes: ['房间很大'],
+          },
+          {
+            candidateId: 'c002',
+            sourceLabel: '房间采光',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('accepts compact topic groups and assignment mappings to reduce model output size', async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  topicGroups: [
+                    {
+                      groupId: 'g1',
+                      sentiment: 'positive',
+                      mergeKey: '房间空间采光',
+                      category: '房型',
+                      displayTopic: '房间宽敞，采光也好',
+                      summary: '客人认可房间空间和采光。',
+                    },
+                  ],
+                  assignments: [
+                    {
+                      candidateId: 'c001',
+                      groupId: 'g1',
+                      acceptedQuotes: ['房间很大'],
+                    },
+                    {
+                      candidateId: 'c002',
+                      groupId: 'g1',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await mergeEvidenceTopics({
+      config,
+      topN: 10,
+      candidates: [
+        {
+          id: 'c001',
+          sourceLabel: '房间空间',
+          sentiment: 'positive',
+          count: 1,
+          quotes: ['房间很大'],
+        },
+        {
+          id: 'c002',
+          sourceLabel: '房间采光',
+          sentiment: 'positive',
+          count: 1,
+          quotes: ['采光很好'],
+        },
+      ],
+      fetchImpl,
+    });
+
+    expect(result.groups).toEqual([
+      {
+        mergeKey: '房间空间采光',
+        sentiment: 'positive',
+        category: '房型',
+        displayTopic: '房间宽敞，采光也好',
+        summary: '客人认可房间空间和采光。',
+        action: undefined,
+        members: [
+          {
+            candidateId: 'c001',
+            sourceLabel: '房间空间',
+            acceptedQuotes: ['房间很大'],
+          },
+          {
+            candidateId: 'c002',
+            sourceLabel: '房间采光',
+            acceptedQuotes: undefined,
+          },
+        ],
+      },
+    ]);
   });
 
   it('throws a typed error when the API key is missing', async () => {
@@ -320,6 +572,69 @@ describe('analyzeBatch', () => {
       code: 'timeout',
       message: 'AI API 请求超时（1秒未返回）',
     });
+  });
+
+  it('uses the configured request timeout duration for analysis requests', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+
+    try {
+      const promise = analyzeBatch({
+        config: { ...config, requestTimeoutSeconds: 600 },
+        records,
+        fetchImpl,
+      });
+      const expectation = expect(promise).rejects.toMatchObject({
+        code: 'timeout',
+        message: 'AI API 请求超时（600秒未返回）',
+      });
+
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the configured request timeout duration for topic merge requests', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+
+    try {
+      const promise = mergeEvidenceTopics({
+        config: { ...config, requestTimeoutSeconds: 600 },
+        topN: 10,
+        candidates: [
+          {
+            id: 'c001',
+            sourceLabel: '地理位置优越',
+            sentiment: 'positive',
+            count: 2,
+            quotes: ['位置很好'],
+          },
+        ],
+        fetchImpl,
+      });
+      const expectation = expect(promise).rejects.toMatchObject({
+        code: 'timeout',
+        message: 'AI API 请求超时（600秒未返回）',
+      });
+
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('throws a typed error when model content is not valid JSON', async () => {

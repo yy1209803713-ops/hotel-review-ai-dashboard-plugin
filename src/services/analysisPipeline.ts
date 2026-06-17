@@ -5,11 +5,14 @@ import type {
   BatchAiResult,
   ReviewRecord,
   TopicEvidenceItem,
+  TopicSentiment,
   TopicMergeCandidate,
   TopicMergeGroup,
+  TopicMergeMember,
   TopicMergeResult,
   TopicSummary,
 } from '../types/analysis';
+import { TOPIC_CATEGORIES } from '../constants/defaults';
 import { debugLog } from './debug';
 import { analyzeBatch, mergeEvidenceTopics } from './aiClient';
 import { calculateOverview } from './stats';
@@ -32,7 +35,7 @@ export type AnalysisCacheUsage = {
   newEvidenceItems: TopicEvidenceItem[];
 };
 
-type SourceTopicMapping = {
+export type SourceTopicMapping = {
   sourceLabel: string;
   sentiment: TopicEvidenceItem['sentiment'];
   mergeKey: string;
@@ -42,6 +45,50 @@ type SourceTopicMapping = {
   acceptedQuotes?: string[];
   action?: string;
 };
+
+export type TopicMappingUsage = {
+  cachedMappingCount: number;
+  missedCandidateCount: number;
+  newCandidates: TopicMergeCandidate[];
+  newGroups: TopicMergeGroup[];
+};
+
+export type TopicMappingReadResult = {
+  cachedMappings: SourceTopicMapping[];
+  cachedCandidates?: TopicMergeCandidate[];
+};
+
+export type ReadTopicMappingsImpl = (params: {
+  candidates: TopicMergeCandidate[];
+}) => Promise<TopicMappingReadResult>;
+
+type TopicMergeStats = {
+  candidateCount: number;
+  mergeCallCount: number;
+  groupCount: number;
+};
+
+type TopicMergeWithStats = {
+  result: TopicMergeResult;
+  stats: TopicMergeStats;
+};
+
+class InvalidTopicMergeCoverageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidTopicMergeCoverageError';
+  }
+}
+
+const GENERIC_TOPIC_LABELS = [
+  ...TOPIC_CATEGORIES,
+  '环境',
+  '周边',
+  '整体体验',
+  '服务质量',
+  '服务态度',
+  'service',
+] as const;
 
 export type AnalysisBatchTiming = {
   batchIndex: number;
@@ -70,7 +117,10 @@ type RunAnalysisParams = {
   onStageTiming?: (timing: AnalysisStageTiming) => void;
   cachedEvidenceItems?: TopicEvidenceItem[];
   cacheMissRecords?: ReviewRecord[];
-  onCacheUsage?: (usage: AnalysisCacheUsage) => void;
+  cachedTopicMappings?: SourceTopicMapping[];
+  readTopicMappingsImpl?: ReadTopicMappingsImpl;
+  onCacheUsage?: (usage: AnalysisCacheUsage) => void | Promise<void>;
+  onTopicMappingUsage?: (usage: TopicMappingUsage) => void | Promise<void>;
   analyzeBatchImpl?: AnalyzeBatchImpl;
   mergeTopicsImpl?: MergeTopicsImpl;
 };
@@ -137,7 +187,7 @@ async function finishAnalysis(input: {
 }): Promise<AnalysisResult> {
   const { params, mergeTopics, newEvidenceItems, cachedEvidenceItems, nowMs } = input;
   const recordsToAnalyze = params.cacheMissRecords ?? params.records;
-  params.onCacheUsage?.({
+  await params.onCacheUsage?.({
     cachedEvidenceCount: cachedEvidenceItems.length,
     cachedRecordCount: unique(cachedEvidenceItems.map((item) => item.recordId)).length,
     analyzedRecordCount: recordsToAnalyze.length,
@@ -146,24 +196,38 @@ async function finishAnalysis(input: {
 
   const validatedEvidence = validateEvidenceItems([...cachedEvidenceItems, ...newEvidenceItems], params.records);
   const candidates = buildMergeCandidates(validatedEvidence);
+  const dynamicTopicMappings = candidates.length && params.readTopicMappingsImpl
+    ? await params.readTopicMappingsImpl({ candidates })
+    : { cachedMappings: [], cachedCandidates: [] };
   const mergeStartedAt = params.onStageTiming ? nowMs() : 0;
-  let mergeResult: TopicMergeResult;
+  let mergeOutput: TopicMergeWithStats;
   try {
-    mergeResult = candidates.length
+        mergeOutput = candidates.length
       ? await mergeCandidateTopicsBySentiment({
           config: params.config,
           candidates,
           topN: params.config.topN,
           mergeTopics,
+          cachedMappings: [...(params.cachedTopicMappings ?? []), ...dynamicTopicMappings.cachedMappings],
+          onTopicMappingUsage: params.onTopicMappingUsage,
         })
-      : { groups: [] };
+      : {
+          result: { groups: [] },
+          stats: {
+            candidateCount: 0,
+            mergeCallCount: 0,
+            groupCount: 0,
+          },
+        };
     if (params.onStageTiming) {
       params.onStageTiming({
         step: 'AI 合并主题',
         durationMs: roundDuration(nowMs() - mergeStartedAt),
         status: 'success',
         records: validatedEvidence.length,
-        detail: `候选主题 ${candidates.length} 个；合并主题 ${mergeResult.groups.length} 个`,
+        detail:
+          `候选主题 ${mergeOutput.stats.candidateCount} 个；AI 调用 ${mergeOutput.stats.mergeCallCount} 次；` +
+          `合并主题 ${mergeOutput.stats.groupCount} 个`,
       });
     }
   } catch (cause) {
@@ -180,7 +244,7 @@ async function finishAnalysis(input: {
   }
   debugLog('analysis.merge-result', {
     candidateCount: candidates.length,
-    rawGroups: mergeResult.groups.map((group) => ({
+    rawGroups: mergeOutput.result.groups.map((group) => ({
       mergeKey: group.mergeKey,
       sentiment: group.sentiment,
       category: group.category,
@@ -194,7 +258,7 @@ async function finishAnalysis(input: {
     })),
   });
   const summaryStartedAt = params.onStageTiming ? nowMs() : 0;
-  const { positiveTopics, negativeTopics } = buildTopicSummaries(validatedEvidence, candidates, mergeResult.groups);
+  const { positiveTopics, negativeTopics } = buildTopicSummaries(validatedEvidence, candidates, mergeOutput.result.groups);
 
   const sortedPositive = sortAndLimit(positiveTopics, params.config.topN);
   const sortedNegative = sortAndLimit(negativeTopics, params.config.topN);
@@ -248,43 +312,31 @@ async function analyzeBatches(params: {
   nowMs?: () => number;
   onBatchTiming?: (timing: AnalysisBatchTiming) => void;
 }): Promise<BatchAiResult[]> {
-  const results: BatchAiResult[] = new Array(params.batches.length);
-  const concurrency = normalizeConcurrency(params.concurrency, params.batches.length);
   const nowMs = params.nowMs ?? defaultNowMs;
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < params.batches.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const batch = params.batches[index];
-      const startedAt = nowMs();
-      try {
-        results[index] = await params.analyze({ config: params.config, records: batch });
-        params.onBatchTiming?.({
-          batchIndex: index,
-          batchCount: params.batches.length,
-          recordCount: batch.length,
-          durationMs: roundDuration(nowMs() - startedAt),
-          status: 'success',
-        });
-      } catch (cause) {
-        params.onBatchTiming?.({
-          batchIndex: index,
-          batchCount: params.batches.length,
-          recordCount: batch.length,
-          durationMs: roundDuration(nowMs() - startedAt),
-          status: 'error',
-        });
-        throw new Error(
-          `第 ${index + 1}/${params.batches.length} 批 AI 分析失败（${batch.length} 条评论）：${formatBatchError(cause)}`,
-        );
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  return results;
+  return runConcurrent(params.batches, params.concurrency, (batch, index) => {
+    const startedAt = nowMs();
+    return params.analyze({ config: params.config, records: batch }).then((result) => {
+      params.onBatchTiming?.({
+        batchIndex: index,
+        batchCount: params.batches.length,
+        recordCount: batch.length,
+        durationMs: roundDuration(nowMs() - startedAt),
+        status: 'success',
+      });
+      return result;
+    }, (cause) => {
+      params.onBatchTiming?.({
+        batchIndex: index,
+        batchCount: params.batches.length,
+        recordCount: batch.length,
+        durationMs: roundDuration(nowMs() - startedAt),
+        status: 'error',
+      });
+      throw new Error(
+        `第 ${index + 1}/${params.batches.length} 批 AI 分析失败（${batch.length} 条评论）：${formatBatchError(cause)}`,
+      );
+    });
+  });
 }
 
 function sortAndLimit(topics: TopicSummary[], limit: number): TopicSummary[] {
@@ -363,7 +415,10 @@ function buildMergeCandidates(evidenceItems: TopicEvidenceItem[]): TopicMergeCan
     current.quotes = unique([...current.quotes, item.quote]).slice(0, 8);
   }
 
-  return [...candidates.values()].map(({ recordIds: _recordIds, ...candidate }) => candidate);
+  return [...candidates.values()].map(({ recordIds: _recordIds, ...candidate }, index) => ({
+    ...candidate,
+    id: createCandidateId(index),
+  }));
 }
 
 async function mergeCandidateTopicsBySentiment(params: {
@@ -371,25 +426,138 @@ async function mergeCandidateTopicsBySentiment(params: {
   candidates: TopicMergeCandidate[];
   topN: number;
   mergeTopics: MergeTopicsImpl;
-}): Promise<TopicMergeResult> {
-  const groups: TopicMergeGroup[] = [];
-  const sentiments: Array<TopicEvidenceItem['sentiment']> = ['positive', 'negative'];
+  cachedMappings: SourceTopicMapping[];
+  onTopicMappingUsage?: (usage: TopicMappingUsage) => void | Promise<void>;
+}): Promise<TopicMergeWithStats> {
+  const cachedGroups = groupsFromCachedMappings(params.candidates, params.cachedMappings);
+  const cachedKeys = new Set(
+    cachedGroups.flatMap((group) =>
+      group.members.map((member) => memberCoverageKey(group.sentiment, member)),
+    ),
+  );
+  const missedCandidates = params.candidates.filter((candidate) => !isCandidateCovered(candidate, cachedKeys));
+  const groups: TopicMergeGroup[] = [...cachedGroups];
+  const newGroups: TopicMergeGroup[] = [];
+  const mergeInputs = splitCandidatesBySentiment(missedCandidates);
 
-  for (const sentiment of sentiments) {
-    const sentimentCandidates = params.candidates.filter((candidate) => candidate.sentiment === sentiment);
-    if (!sentimentCandidates.length) {
+  if (mergeInputs.length) {
+    const mergedGroups = await Promise.all(mergeInputs.map(async (candidates) => {
+      const result = await params.mergeTopics({
+        config: params.config,
+        candidates,
+        topN: params.topN,
+      });
+      ensureMergeResultCoversCandidates(candidates, result.groups, describeTopicMergeContext(candidates));
+      return hydrateAcceptedQuotes(candidates, result.groups);
+    }));
+
+    for (const hydratedGroups of mergedGroups) {
+      newGroups.push(...hydratedGroups);
+      groups.push(...hydratedGroups);
+    }
+  }
+
+  await params.onTopicMappingUsage?.({
+    cachedMappingCount: params.candidates.length - missedCandidates.length,
+    missedCandidateCount: missedCandidates.length,
+    newCandidates: missedCandidates,
+    newGroups,
+  });
+
+  return {
+    result: { groups },
+    stats: {
+      candidateCount: params.candidates.length,
+      mergeCallCount: mergeInputs.length,
+      groupCount: groups.length,
+    },
+  };
+}
+
+function splitCandidatesBySentiment(candidates: TopicMergeCandidate[]): TopicMergeCandidate[][] {
+  return (['positive', 'negative'] as const)
+    .map((sentiment) => candidates.filter((candidate) => candidate.sentiment === sentiment))
+    .filter((sentimentCandidates) => sentimentCandidates.length);
+}
+
+function describeTopicMergeContext(candidates: TopicMergeCandidate[]): string {
+  const sentiments = unique(candidates.map((candidate) => candidate.sentiment));
+  if (sentiments.length === 1 && sentiments[0] === 'positive') {
+    return '好评主题合并';
+  }
+  if (sentiments.length === 1 && sentiments[0] === 'negative') {
+    return '风险主题合并';
+  }
+  return 'AI 主题合并';
+}
+
+function groupsFromCachedMappings(
+  candidates: TopicMergeCandidate[],
+  mappings: SourceTopicMapping[],
+): TopicMergeGroup[] {
+  if (!mappings.length) {
+    return [];
+  }
+  const mappingsByKey = new Map(mappings.map((mapping) => [evidenceKey(mapping.sentiment, mapping.sourceLabel), mapping]));
+  const groups = new Map<string, TopicMergeGroup>();
+
+  for (const candidate of candidates) {
+    const mapping = mappingsByKey.get(evidenceKey(candidate.sentiment, candidate.sourceLabel));
+    if (!mapping) {
+      continue;
+    }
+    const groupKey = evidenceKey(mapping.sentiment, mapping.mergeKey);
+    const current = groups.get(groupKey);
+    const member: TopicMergeMember = {
+      candidateId: candidate.id,
+      sourceLabel: candidate.sourceLabel,
+      acceptedQuotes: mapping.acceptedQuotes?.filter((quote) => candidate.quotes.includes(quote)),
+    };
+    if (!current) {
+      groups.set(groupKey, {
+        mergeKey: mapping.mergeKey,
+        sentiment: mapping.sentiment,
+        category: mapping.category,
+        displayTopic: mapping.displayTopic,
+        summary: mapping.summary,
+        action: mapping.action,
+        members: [member],
+      });
       continue;
     }
 
-    const result = await params.mergeTopics({
-      config: params.config,
-      candidates: sentimentCandidates,
-      topN: params.topN,
-    });
-    groups.push(...result.groups);
+    current.members.push(member);
+    if (mapping.summary.length > current.summary.length) {
+      current.summary = mapping.summary;
+    }
+    current.action = current.action || mapping.action;
   }
 
-  return { groups };
+  return [...groups.values()];
+}
+
+function hydrateAcceptedQuotes(
+  candidates: TopicMergeCandidate[],
+  groups: TopicMergeGroup[],
+): TopicMergeGroup[] {
+  const candidatesByKey = buildCandidateLookup(candidates, (candidate) => candidate);
+  return groups.map((group) => ({
+    ...group,
+    members: group.members.map((member) => {
+      if (member.acceptedQuotes !== undefined) {
+        return member;
+      }
+      const candidate = candidatesByKey.get(memberCoverageKey(group.sentiment, member));
+      return {
+        ...member,
+        acceptedQuotes: candidate?.quotes ?? [],
+      };
+    }),
+  }));
+}
+
+function createCandidateId(index: number): string {
+  return `c${String(index + 1).padStart(3, '0')}`;
 }
 
 function buildTopicSummaries(
@@ -401,7 +569,11 @@ function buildTopicSummaries(
   const topics = new Map<string, TopicSummary>();
 
   for (const item of evidenceItems) {
-    const mapping = mappingBySource.get(evidenceKey(item.sentiment, item.aspectLabel)) ?? localMapping(item.aspectLabel, item.sentiment);
+    const key = evidenceKey(item.sentiment, item.aspectLabel);
+    const mapping = mappingBySource.get(key);
+    if (!mapping) {
+      throw new Error(`AI 主题归并缺少候选映射：${key}`);
+    }
     if (!isQuoteAccepted(mapping, item.quote)) {
       continue;
     }
@@ -451,21 +623,24 @@ function buildMappingBySource(
   groups: TopicMergeGroup[],
 ): Map<string, SourceTopicMapping> {
   const bySource = new Map<string, SourceTopicMapping>();
-  const candidatesByKey = new Map(candidates.map((candidate) => [evidenceKey(candidate.sentiment, candidate.sourceLabel), candidate]));
-
-  for (const candidate of candidates) {
-    bySource.set(evidenceKey(candidate.sentiment, candidate.sourceLabel), localMapping(candidate.sourceLabel, candidate.sentiment));
-  }
+  const candidatesByKey = buildCandidateLookup(candidates, (candidate) => candidate);
+  const coveredCandidateKeys = new Set<string>();
 
   for (const group of groups) {
+    validateDisplayTopic(group);
     const mergeKey = group.mergeKey.trim() || group.members[0]?.sourceLabel || group.displayTopic;
     for (const member of group.members) {
-      const key = evidenceKey(group.sentiment, member.sourceLabel);
+      const key = memberCoverageKey(group.sentiment, member);
       const candidate = candidatesByKey.get(key);
       if (!candidate) {
-        continue;
+        throw new Error(`AI 主题归并返回了未知候选标签：${describeMemberKey(group.sentiment, member)}`);
       }
-      bySource.set(key, {
+      const canonicalKey = candidateCoverageKey(candidate);
+      if (coveredCandidateKeys.has(canonicalKey)) {
+        throw new Error(`AI 主题归并重复覆盖候选标签：${describeCandidateCoverageKey(candidate)}`);
+      }
+      coveredCandidateKeys.add(canonicalKey);
+      bySource.set(evidenceKey(candidate.sentiment, candidate.sourceLabel), {
         sourceLabel: candidate.sourceLabel,
         sentiment: group.sentiment,
         mergeKey,
@@ -478,7 +653,121 @@ function buildMappingBySource(
     }
   }
 
+  const missing = candidates
+    .filter((candidate) => !coveredCandidateKeys.has(candidateCoverageKey(candidate)))
+    .map(candidateCoverageKey);
+  if (missing.length) {
+    throw new Error(`AI 主题归并漏掉候选标签：${missing.map((key) => describeCandidateByCoverageKey(key, candidates)).join('、')}`);
+  }
+
   return bySource;
+}
+
+function ensureMergeResultCoversCandidates(
+  candidates: TopicMergeCandidate[],
+  groups: TopicMergeGroup[],
+  context: string,
+): void {
+  const candidateKeys = new Set(candidates.flatMap(candidateCoverageKeys));
+  const candidatesByKey = buildCandidateLookup(candidates, (candidate) => candidate);
+  const coveredKeys = new Set<string>();
+  const unknownMemberKeys: string[] = [];
+  const duplicateMemberKeys: string[] = [];
+  const sentimentMismatchKeys: string[] = [];
+  for (const group of groups) {
+    for (const member of group.members) {
+      const key = memberCoverageKey(group.sentiment, member);
+      const candidate = candidatesByKey.get(key);
+      if (!candidate || !candidateKeys.has(key)) {
+        unknownMemberKeys.push(describeMemberKey(group.sentiment, member));
+        continue;
+      }
+      const canonicalKey = candidateCoverageKey(candidate);
+      if (coveredKeys.has(canonicalKey)) {
+        duplicateMemberKeys.push(describeCandidateCoverageKey(candidate));
+        continue;
+      }
+      if (candidate.sentiment !== group.sentiment) {
+        sentimentMismatchKeys.push(describeSentimentMismatch(candidate, group.sentiment));
+        continue;
+      }
+      coveredKeys.add(canonicalKey);
+    }
+  }
+  const missingCandidateKeys = candidates
+    .filter((candidate) => !coveredKeys.has(candidateCoverageKey(candidate)))
+    .map(describeCandidateKey);
+  if (unknownMemberKeys.length || duplicateMemberKeys.length || sentimentMismatchKeys.length || missingCandidateKeys.length) {
+    logInvalidTopicMergeResult({
+      context,
+      candidates,
+      groups,
+      unknownMemberKeys,
+      duplicateMemberKeys,
+      sentimentMismatchKeys,
+      missingCandidateKeys,
+    });
+  }
+  if (unknownMemberKeys.length) {
+    throw new InvalidTopicMergeCoverageError(
+      `${context}结果无效：AI 主题归并返回了未知候选标签：${unique(unknownMemberKeys).join('、')}`,
+    );
+  }
+  if (duplicateMemberKeys.length) {
+    throw new InvalidTopicMergeCoverageError(
+      `${context}结果无效：AI 主题归并重复覆盖候选标签：${unique(duplicateMemberKeys).join('、')}`,
+    );
+  }
+  if (sentimentMismatchKeys.length) {
+    throw new InvalidTopicMergeCoverageError(
+      `${context}结果无效：AI 主题归并把候选放入了相反情绪分组：${unique(sentimentMismatchKeys).join('、')}`,
+    );
+  }
+  if (missingCandidateKeys.length) {
+    throw new InvalidTopicMergeCoverageError(
+      `${context}结果无效：AI 主题归并漏掉候选标签：${missingCandidateKeys.join('、')}`,
+    );
+  }
+}
+
+function logInvalidTopicMergeResult(params: {
+  context: string;
+  candidates: TopicMergeCandidate[];
+  groups: TopicMergeGroup[];
+  unknownMemberKeys: string[];
+  duplicateMemberKeys: string[];
+  sentimentMismatchKeys: string[];
+  missingCandidateKeys: string[];
+}): void {
+  console.info('__HOTEL_REVIEW_AI_TOPIC_MERGE_INVALID__', JSON.stringify({
+    context: params.context,
+    candidateCount: params.candidates.length,
+    groupCount: params.groups.length,
+    unknownMemberKeys: unique(params.unknownMemberKeys),
+    duplicateMemberKeys: unique(params.duplicateMemberKeys),
+    sentimentMismatchKeys: unique(params.sentimentMismatchKeys),
+    missingCandidateKeys: unique(params.missingCandidateKeys),
+    candidates: params.candidates.map((candidate) => ({
+      key: evidenceKey(candidate.sentiment, candidate.sourceLabel),
+      id: candidate.id,
+      sourceLabel: candidate.sourceLabel,
+      sentiment: candidate.sentiment,
+      count: candidate.count,
+      quotes: candidate.quotes.slice(0, 5),
+    })),
+    groups: params.groups.map((group) => ({
+      mergeKey: group.mergeKey,
+      sentiment: group.sentiment,
+      category: group.category,
+      displayTopic: group.displayTopic,
+      members: group.members.map((member) => ({
+        key: describeMemberKey(group.sentiment, member),
+        candidateId: member.candidateId,
+        sourceLabel: member.sourceLabel,
+        acceptedQuotes: member.acceptedQuotes?.slice(0, 5),
+      })),
+    })),
+  }));
 }
 
 async function localMergeTopics(params: {
@@ -494,11 +783,12 @@ function localGroup(
   sentiment: TopicEvidenceItem['sentiment'],
   quotes: string[],
 ): TopicMergeGroup {
+  const category = inferLocalCategory(sourceLabel);
   return {
     mergeKey: sourceLabel,
     sentiment,
-    category: sourceLabel,
-    displayTopic: sourceLabel,
+    category,
+    displayTopic: `${sourceLabel}相关体验`,
     summary: `${sourceLabel}相关评论证据。`,
     members: [
       {
@@ -509,15 +799,48 @@ function localGroup(
   };
 }
 
-function localMapping(sourceLabel: string, sentiment: TopicEvidenceItem['sentiment']): SourceTopicMapping {
-  return {
-    sourceLabel,
-    sentiment,
-    mergeKey: sourceLabel,
-    category: sourceLabel,
-    displayTopic: sourceLabel,
-    summary: `${sourceLabel}相关评论证据。`,
-  };
+function inferLocalCategory(sourceLabel: string): string {
+  if (/位置|地理|周边|交通|出行/.test(sourceLabel)) {
+    return '位置';
+  }
+  if (/服务|员工|前台|响应/.test(sourceLabel)) {
+    return '服务';
+  }
+  if (/卫生|清洁|毛巾|干净/.test(sourceLabel)) {
+    return '卫生';
+  }
+  if (/设施|隔音|噪音|空调|电梯|停车/.test(sourceLabel)) {
+    return '设施';
+  }
+  if (/早餐|餐饮|口味|菜品/.test(sourceLabel)) {
+    return '餐饮';
+  }
+  return '其他';
+}
+
+function validateDisplayTopic(group: TopicMergeGroup): void {
+  const displayTopic = group.displayTopic.trim();
+  const category = group.category.trim();
+  if (!displayTopic) {
+    throw new Error('AI 主题归并返回了空 displayTopic');
+  }
+  if (isGenericTopicLabel(displayTopic, category)) {
+    throw new Error(`displayTopic 不能使用上位类目“${displayTopic}”`);
+  }
+  if (displayTopic.length < 4) {
+    throw new Error(`displayTopic 过于笼统，不能使用“${displayTopic}”`);
+  }
+  if (!/[\u4e00-\u9fa5]/.test(displayTopic)) {
+    throw new Error(`displayTopic 必须是中文口语短句，不能使用“${displayTopic}”`);
+  }
+}
+
+function isGenericTopicLabel(displayTopic: string, category: string): boolean {
+  const normalizedTopic = normalizeTopic(displayTopic);
+  if (normalizedTopic === normalizeTopic(category)) {
+    return true;
+  }
+  return GENERIC_TOPIC_LABELS.some((label) => normalizedTopic === normalizeTopic(label));
 }
 
 function isQuoteAccepted(mapping: SourceTopicMapping, quote: string): boolean {
@@ -541,6 +864,60 @@ function intersection(left: Set<string>, right: Set<string>): Set<string> {
 
 function evidenceKey(sentiment: TopicEvidenceItem['sentiment'], label: string): string {
   return `${sentiment}|${normalizeTopic(label)}`;
+}
+
+function candidateCoverageKey(candidate: TopicMergeCandidate): string {
+  return candidate.id?.trim() ? `id|${candidate.id.trim()}` : evidenceKey(candidate.sentiment, candidate.sourceLabel);
+}
+
+function candidateCoverageKeys(candidate: TopicMergeCandidate): string[] {
+  return unique([
+    candidate.id?.trim() ? `id|${candidate.id.trim()}` : '',
+    evidenceKey(candidate.sentiment, candidate.sourceLabel),
+  ]);
+}
+
+function memberCoverageKey(sentiment: TopicSentiment, member: TopicMergeMember): string {
+  return member.candidateId?.trim() ? `id|${member.candidateId.trim()}` : evidenceKey(sentiment, member.sourceLabel);
+}
+
+function buildCandidateLookup<TValue>(
+  candidates: TopicMergeCandidate[],
+  getValue: (candidate: TopicMergeCandidate, index: number) => TValue,
+): Map<string, TValue> {
+  const lookup = new Map<string, TValue>();
+  candidates.forEach((candidate, index) => {
+    const value = getValue(candidate, index);
+    for (const key of candidateCoverageKeys(candidate)) {
+      lookup.set(key, value);
+    }
+  });
+  return lookup;
+}
+
+function isCandidateCovered(candidate: TopicMergeCandidate, coveredKeys: Set<string>): boolean {
+  return candidateCoverageKeys(candidate).some((key) => coveredKeys.has(key));
+}
+
+function describeMemberKey(sentiment: TopicSentiment, member: TopicMergeMember): string {
+  return member.candidateId?.trim() ? `id|${member.candidateId.trim()}` : evidenceKey(sentiment, member.sourceLabel);
+}
+
+function describeCandidateKey(candidate: TopicMergeCandidate): string {
+  return evidenceKey(candidate.sentiment, candidate.sourceLabel);
+}
+
+function describeCandidateCoverageKey(candidate: TopicMergeCandidate): string {
+  return candidate.id?.trim() ? `id|${candidate.id.trim()}` : describeCandidateKey(candidate);
+}
+
+function describeSentimentMismatch(candidate: TopicMergeCandidate, groupSentiment: TopicSentiment): string {
+  return `${describeCandidateKey(candidate)} -> ${groupSentiment}`;
+}
+
+function describeCandidateByCoverageKey(key: string, candidates: TopicMergeCandidate[]): string {
+  const candidate = candidates.find((item) => candidateCoverageKey(item) === key);
+  return candidate ? describeCandidateKey(candidate) : key;
 }
 
 function quoteExistsInContent(content: string, quote: string): boolean {
@@ -571,6 +948,27 @@ function chunk<T>(items: T[], size: number): T[][] {
     batches.push(items.slice(index, index + safeSize));
   }
   return batches;
+}
+
+async function runConcurrent<TInput, TOutput>(
+  items: TInput[],
+  concurrencyValue: number | undefined,
+  task: (item: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  const results: TOutput[] = new Array(items.length);
+  const concurrency = normalizeConcurrency(concurrencyValue, items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await task(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
 }
 
 function normalizeConcurrency(value: number | undefined, batchCount: number): number {
