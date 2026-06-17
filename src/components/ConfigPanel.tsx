@@ -12,13 +12,18 @@ export function ConfigPanel(props: {
   dataRanges: IDataRange[];
   saving: boolean;
   testingConnection: boolean;
+  warmupRunning: boolean;
   disabled?: boolean;
   onChange: (config: PluginConfig) => void;
   onSave: () => void;
   onTestConnection: () => void;
+  onWarmupBootstrap: () => void;
+  onWarmupIncremental: () => void;
 }) {
   const update = (patch: Partial<PluginConfig>) => props.onChange({ ...props.config, ...patch });
   const updateAi = (patch: Partial<PluginConfig['ai']>) => update({ ai: { ...props.config.ai, ...patch } });
+  const updateWarmup = (patch: Partial<PluginConfig['warmup']>) =>
+    update({ warmup: { ...props.config.warmup, ...patch } });
   const updateSource = (patch: Partial<PluginConfig['source']>) => update({ source: { ...props.config.source, ...patch } });
   const updateFields = (key: keyof PluginConfig['source']['fields'], value: string) =>
     updateSource({ fields: { ...props.config.source.fields, [key]: value } });
@@ -169,6 +174,53 @@ export function ConfigPanel(props: {
               onChange={(value) => updateAi({ requestTimeoutSeconds: typeof value === 'number' ? value : 600 })}
             />
           </Field>
+        </section>
+
+        <section className="config-section">
+          <div className="config-section-head">
+            <h3>缓存预热</h3>
+          </div>
+          <Banner
+            type="info"
+            closeIcon={null}
+            description="定时预热由飞书工作流或外部调度调用后端接口；插件按钮只触发后端任务。"
+          />
+          <Field label="Warmup Endpoint URL">
+            <Input
+              name="hotel-review-ai-warmup-endpoint-url"
+              autoComplete="off"
+              spellCheck={false}
+              value={props.config.warmup.endpointUrl}
+              onChange={(value) => updateWarmup({ endpointUrl: value })}
+            />
+          </Field>
+          <Field label="Warmup Secret">
+            <Input
+              name="hotel-review-ai-warmup-secret"
+              autoComplete="new-password"
+              mode="password"
+              spellCheck={false}
+              value={props.config.warmup.secret}
+              onChange={(value) => updateWarmup({ secret: value })}
+            />
+          </Field>
+          <div className="warmup-actions">
+            <Button
+              disabled={props.disabled || props.warmupRunning || !props.config.source.tableId.trim()}
+              loading={props.warmupRunning}
+              onClick={props.onWarmupBootstrap}
+            >
+              初始化缓存
+            </Button>
+            <Button
+              theme="solid"
+              disabled={props.disabled || props.warmupRunning || !props.config.source.tableId.trim()}
+              loading={props.warmupRunning}
+              onClick={props.onWarmupIncremental}
+            >
+              立即预热
+            </Button>
+          </div>
         </section>
 
         <section className="config-section">

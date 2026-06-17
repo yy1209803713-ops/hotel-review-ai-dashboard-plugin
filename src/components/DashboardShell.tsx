@@ -1,6 +1,8 @@
 import type { AnalysisResult, ReviewRecord, TopicSummary } from '../types/analysis';
 import type { FilterState, PeriodType } from '../types/config';
+import type { WarmupResponse } from '../services/warmup';
 import { ActionItems } from './ActionItems';
+import { CacheWarmupStatus } from './CacheWarmupStatus';
 import { EmptyState, ErrorBanner, LoadingPanel, StaleBanner, WarningBanner } from './StateViews';
 import { FilterBar } from './FilterBar';
 import { OverviewMetrics } from './OverviewMetrics';
@@ -21,6 +23,7 @@ export function DashboardShell(props: {
   error: string | null;
   scopeWarning: string | null;
   stale: boolean;
+  warmupStatus: { response: WarmupResponse; triggeredAt: string } | null;
   onFilterChange: (filters: FilterState) => void;
   onPeriodChange: (periodType: PeriodType) => void;
   onUpdate: () => void;
@@ -54,6 +57,7 @@ export function DashboardShell(props: {
           {props.error ? <ErrorBanner message={props.error} /> : null}
           {props.scopeWarning ? <WarningBanner message={props.scopeWarning} /> : null}
           {props.stale ? <StaleBanner /> : null}
+          {props.warmupStatus ? <CacheWarmupStatus {...props.warmupStatus} /> : null}
           {props.loading && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
           {props.loading && props.analysis ? <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact /> : null}
           {!props.loading && !props.analysis ? <EmptyState onUpdate={props.onUpdate} /> : null}

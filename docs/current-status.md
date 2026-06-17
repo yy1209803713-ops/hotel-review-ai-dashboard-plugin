@@ -1,5 +1,38 @@
 # 酒店评论 AI 仪表盘插件当前状态
 
+## V1.2 AI Cache Warmup 更新
+
+更新时间：2026-06-17
+
+本次按 `docs/superpowers/specs/2026-06-17-ai-cache-warmup-design.md` 增加插件侧缓存预热能力：
+
+- 新增 `warmupAnalysisCache()` 服务契约，用于复用证据缓存和主题映射缓存的 hit/miss 预热逻辑。
+- 新增 warmup API client，插件配置支持 `warmup.endpointUrl` 和 `warmup.secret`。
+- 配置面板新增 `缓存预热` 区域，提供 `初始化缓存` 和 `立即预热` 两个按钮。
+- Dashboard 内容区新增 `缓存预热状态`，展示证据缓存覆盖、待补评论、主题映射覆盖、上次状态和错误 stage/message。
+- 定时预热仍由飞书 Workflow 或外部调度调用后端接口，Dashboard 插件前端不承载 cron。
+
+后端边界：
+
+- 当前仓库没有后端 API 宿主。
+- 当前实现已准备 `POST /api/hotel-review-ai/warmup` 的请求/响应契约和插件触发入口。
+- 真正的 Base 读写、AI API 密钥、Workflow 调度和 job log 由后端部署层承接。
+
+Workflow 配置说明见：
+
+```text
+docs/ai-cache-warmup-workflow.md
+```
+
+最终验证：
+
+```bash
+npm test -- --run
+npm run build
+```
+
+结果：21 个测试文件、161 个测试通过；构建通过。Vite 仍提示既有 Sass deprecation 和 chunk size warning，不影响本次 warmup 插件侧改造。
+
 ## V1.2 更新
 
 更新时间：2026-06-15

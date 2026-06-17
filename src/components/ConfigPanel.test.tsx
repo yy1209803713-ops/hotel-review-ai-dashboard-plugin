@@ -12,8 +12,13 @@ vi.mock('@douyinfe/semi-ui', () => ({
       {props.children}
     </button>
   ),
-  Input: (props: { value?: string; onChange?: (value: string) => void }) => (
-    <input value={props.value ?? ''} onChange={(event) => props.onChange?.(event.target.value)} />
+  Input: (props: { name?: string; value?: string; onChange?: (value: string) => void }) => (
+    <input
+      aria-label={props.name}
+      name={props.name}
+      value={props.value ?? ''}
+      onChange={(event) => props.onChange?.(event.target.value)}
+    />
   ),
   InputNumber: (props: { value?: number | null; min?: number; max?: number; onChange?: (value: number) => void }) => (
     <input
@@ -73,6 +78,9 @@ describe('ConfigPanel', () => {
         onChange={onChange}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -115,6 +123,9 @@ describe('ConfigPanel', () => {
         onChange={onChange}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -150,6 +161,9 @@ describe('ConfigPanel', () => {
         onChange={vi.fn()}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -183,6 +197,9 @@ describe('ConfigPanel', () => {
         onChange={vi.fn()}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -201,6 +218,9 @@ describe('ConfigPanel', () => {
         onChange={vi.fn()}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -225,6 +245,9 @@ describe('ConfigPanel', () => {
         onChange={onChange}
         onSave={vi.fn()}
         onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -238,5 +261,82 @@ describe('ConfigPanel', () => {
         requestTimeoutSeconds: 900,
       },
     });
+  });
+
+  it('renders warmup controls and emits endpoint and secret updates', () => {
+    const onChange = vi.fn();
+    render(
+      <ConfigPanel
+        config={DEFAULT_CONFIG}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
+        saving={false}
+        testingConnection={false}
+        onChange={onChange}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={vi.fn()}
+        onWarmupIncremental={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('缓存预热')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-warmup-endpoint-url'), {
+      target: { value: 'https://backend.example.com/api/hotel-review-ai/warmup' },
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      ...DEFAULT_CONFIG,
+      warmup: {
+        ...DEFAULT_CONFIG.warmup,
+        endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-warmup-secret'), {
+      target: { value: 'warmup-secret' },
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      ...DEFAULT_CONFIG,
+      warmup: {
+        ...DEFAULT_CONFIG.warmup,
+        secret: 'warmup-secret',
+      },
+    });
+  });
+
+  it('calls warmup handlers from warmup action buttons', () => {
+    const onWarmupBootstrap = vi.fn();
+    const onWarmupIncremental = vi.fn();
+    render(
+      <ConfigPanel
+        config={{
+          ...DEFAULT_CONFIG,
+          source: {
+            ...DEFAULT_CONFIG.source,
+            tableId: 'table-1',
+          },
+        }}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
+        saving={false}
+        testingConnection={false}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+        warmupRunning={false}
+        onWarmupBootstrap={onWarmupBootstrap}
+        onWarmupIncremental={onWarmupIncremental}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('初始化缓存'));
+    fireEvent.click(screen.getByText('立即预热'));
+
+    expect(onWarmupBootstrap).toHaveBeenCalledTimes(1);
+    expect(onWarmupIncremental).toHaveBeenCalledTimes(1);
   });
 });

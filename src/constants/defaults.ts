@@ -72,6 +72,10 @@ export const DEFAULT_CONFIG: PluginConfig = {
     requestTimeoutSeconds: 600,
     topN: 10,
   },
+  warmup: {
+    endpointUrl: '',
+    secret: '',
+  },
   writeback: {
     enabled: false,
     confirmed: false,

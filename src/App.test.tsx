@@ -15,6 +15,10 @@ const analysisPipelineMock = vi.hoisted(() => ({
   runAnalysis: vi.fn(),
 }));
 
+const warmupClientMock = vi.hoisted(() => ({
+  triggerWarmup: vi.fn(),
+}));
+
 vi.mock('./runtime/sdk', () => ({
   runtime: new Proxy(
     {},
@@ -26,6 +30,10 @@ vi.mock('./runtime/sdk', () => ({
 
 vi.mock('./services/analysisPipeline', () => ({
   runAnalysis: analysisPipelineMock.runAnalysis,
+}));
+
+vi.mock('./services/warmupClient', () => ({
+  triggerWarmup: warmupClientMock.triggerWarmup,
 }));
 
 vi.mock('@douyinfe/semi-ui', () => ({
@@ -110,6 +118,21 @@ describe('App initialization', () => {
     vi.clearAllMocks();
     runtimeRef.current = undefined;
     analysisPipelineMock.runAnalysis.mockResolvedValue(createAnalysisResult(0));
+    warmupClientMock.triggerWarmup.mockResolvedValue({
+      jobId: 'warmup-1',
+      status: 'success',
+      mode: 'incremental',
+      summary: {
+        totalReviews: 2,
+        evidenceCacheHits: 1,
+        evidenceCacheMisses: 1,
+        evidenceRecordsSaved: 1,
+        topicMappingHits: 2,
+        topicMappingMisses: 1,
+        topicMappingsSaved: 1,
+      },
+      errors: [],
+    });
   });
 
   afterEach(() => {
@@ -396,6 +419,85 @@ describe('App initialization', () => {
         },
       ]),
     );
+  });
+
+  it('triggers incremental cache warmup from Config panel controls', async () => {
+    const savedConfig = withSource({
+      tableId: 'tbl1',
+      fields: optionFieldMapping('a'),
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...savedConfig,
+          warmup: {
+            endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
+            secret: 'warmup-secret',
+          },
+        },
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('立即预热')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('立即预热'));
+
+    await waitFor(() => expect(warmupClientMock.triggerWarmup).toHaveBeenCalledTimes(1));
+    expect(warmupClientMock.triggerWarmup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ tableId: 'tbl1' }),
+        warmup: {
+          endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
+          secret: 'warmup-secret',
+        },
+      }),
+      'incremental',
+      'dashboard-button',
+    );
+    expect(await screen.findByText('缓存预热状态')).toBeInTheDocument();
+    expect(Toast.success).toHaveBeenCalledWith('缓存预热完成：新增证据 1 条，新增主题映射 1 条');
+  });
+
+  it('shows backend stage and message when cache warmup fails', async () => {
+    warmupClientMock.triggerWarmup.mockRejectedValueOnce(Object.assign(new Error('permission denied'), {
+      stage: 'read_reviews',
+    }));
+    const runtime = fakeRuntime({
+      getState: () => 'Config',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({ tableId: 'tbl1', fields: optionFieldMapping('a') }),
+          warmup: {
+            endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
+            secret: 'warmup-secret',
+          },
+        },
+      })),
+      getCategories: vi.fn(async () => optionCategories('a')),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('初始化缓存')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('初始化缓存'));
+
+    expect(await screen.findByText('缓存预热失败：read_reviews permission denied')).toBeInTheDocument();
+    expect(Toast.error).toHaveBeenCalledWith('缓存预热失败：read_reviews permission denied');
   });
 
   it('keeps the latest same-table preview when data range switches resolve out of order', async () => {

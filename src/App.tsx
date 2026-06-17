@@ -22,9 +22,11 @@ import {
   touchTopicMappingCacheEntries,
   type TopicMappingCacheReadResult,
 } from './services/topicMappingCache';
+import { triggerWarmup } from './services/warmupClient';
 import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
 import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
+import type { WarmupMode, WarmupResponse } from './services/warmup';
 
 const EVIDENCE_PAGE_SIZE = 10;
 const FILTER_OPTION_REQUIRED_FIELD_KEYS: Array<keyof FieldMapping> = ['content', 'hotelName', 'checkInMonth'];
@@ -47,6 +49,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
+  const [warmupRunning, setWarmupRunning] = useState(false);
+  const [warmupStatus, setWarmupStatus] = useState<{ response: WarmupResponse; triggeredAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentScope, setCurrentScope] = useState<ScopeSnapshot | null>(null);
   const [optionRecords, setOptionRecords] = useState<ReviewRecord[]>([]);
@@ -589,6 +593,66 @@ export default function App() {
     }
   }
 
+  async function handleWarmup(mode: WarmupMode) {
+    setError(null);
+    setWarmupRunning(true);
+    const triggeredAt = new Date().toISOString();
+    try {
+      const response = await triggerWarmup(config, mode, 'dashboard-button');
+      setWarmupStatus({ response, triggeredAt });
+      if (response.status === 'failed') {
+        const message = formatWarmupFailure(response.errors[0]);
+        setError(message);
+        Toast.error(message);
+        return;
+      }
+      if (response.status === 'skipped') {
+        const message = response.errors[0]
+          ? formatWarmupFailure(response.errors[0]).replace('缓存预热失败', '缓存预热跳过')
+          : '缓存预热已跳过';
+        Toast.warning(message);
+        return;
+      }
+      Toast.success(
+        `缓存预热完成：新增证据 ${response.summary.evidenceRecordsSaved} 条，新增主题映射 ${response.summary.topicMappingsSaved} 条`,
+      );
+    } catch (cause) {
+      const message = formatWarmupClientError(cause);
+      setWarmupStatus((current) =>
+        current && current.response.status === 'failed'
+          ? current
+          : {
+              response: {
+                jobId: 'warmup-client-error',
+                status: 'failed',
+                mode,
+                summary: {
+                  totalReviews: 0,
+                  evidenceCacheHits: 0,
+                  evidenceCacheMisses: 0,
+                  evidenceRecordsSaved: 0,
+                  topicMappingHits: 0,
+                  topicMappingMisses: 0,
+                  topicMappingsSaved: 0,
+                },
+                errors: [
+                  {
+                    stage: 'validate_request',
+                    message,
+                  },
+                ],
+              },
+              triggeredAt,
+            },
+      );
+      setError(message);
+      Toast.error(message);
+    } finally {
+      setWarmupRunning(false);
+      runtime.setRendered();
+    }
+  }
+
   async function handleSelectTopic(topic: TopicSummary) {
     setSelectedTopic(topic);
     setEvidencePage(1);
@@ -826,6 +890,7 @@ export default function App() {
       error={error}
       scopeWarning={scopeWarning}
       stale={stale}
+      warmupStatus={warmupStatus}
       onFilterChange={handleFilterChange}
       onPeriodChange={handlePeriodChange}
       onUpdate={handleUpdateAnalysis}
@@ -849,10 +914,13 @@ export default function App() {
         dataRanges={dataRanges}
         saving={saving}
         testingConnection={testingConnection}
+        warmupRunning={warmupRunning}
         disabled={loading || saving}
         onChange={handleConfigChange}
         onSave={handleSaveConfig}
         onTestConnection={handleTestConnection}
+        onWarmupBootstrap={() => handleWarmup('bootstrap')}
+        onWarmupIncremental={() => handleWarmup('incremental')}
       />
     </div>
   );
@@ -876,6 +944,22 @@ function readRecordsForConfig(runtime: DashboardRuntime, pluginConfig: PluginCon
       fields: pluginConfig.source.fields,
     },
   );
+}
+
+function formatWarmupFailure(error: WarmupResponse['errors'][number] | undefined): string {
+  if (!error) {
+    return '缓存预热失败';
+  }
+  return `缓存预热失败：${error.stage} ${error.message}`;
+}
+
+function formatWarmupClientError(cause: unknown): string {
+  const error = cause as { stage?: unknown; message?: unknown };
+  const message = typeof error.message === 'string' ? error.message : cause instanceof Error ? cause.message : String(cause);
+  if (typeof error.stage === 'string' && error.stage) {
+    return `缓存预热失败：${error.stage} ${message}`;
+  }
+  return `缓存预热失败：${message}`;
 }
 
 function withComputedRange(filters: FilterState): FilterState {

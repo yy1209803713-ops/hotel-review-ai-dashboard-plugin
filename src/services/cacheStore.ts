@@ -64,6 +64,10 @@ function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
     ...DEFAULT_CONFIG.ai,
     ...config.ai,
   };
+  const warmup = {
+    ...DEFAULT_CONFIG.warmup,
+    ...config.warmup,
+  };
   const writeback = {
     ...DEFAULT_CONFIG.writeback,
     ...config.writeback,
@@ -83,6 +87,7 @@ function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
       apiKey: isEmptyApiKey ? '' : ai.apiKey,
       model: isOldDefaultModel ? DEFAULT_CONFIG.ai.model : ai.model,
     },
+    warmup,
     writeback,
   };
 }

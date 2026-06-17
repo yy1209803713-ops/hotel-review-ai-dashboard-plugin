@@ -66,6 +66,10 @@ export type PluginConfig = {
   source: SourceConfig;
   filters: FilterState;
   ai: AiConfig;
+  warmup: {
+    endpointUrl: string;
+    secret: string;
+  };
   writeback: WritebackConfig;
   analysisCache?: AnalysisCache;
 };

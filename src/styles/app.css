@@ -224,6 +224,55 @@ textarea {
   font-weight: 400;
 }
 
+.warmup-status-panel {
+  border-color: #bfdbfe;
+}
+
+.warmup-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.warmup-status-metric {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+
+.warmup-status-metric span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warmup-status-metric strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.warmup-status-error {
+  margin: 0 14px 14px;
+  padding: 9px 10px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: var(--red-soft);
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .rank-table {
   width: 100%;
   border-collapse: collapse;
@@ -686,6 +735,13 @@ mark {
   gap: 10px;
 }
 
+.warmup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
 .config-switch {
   display: flex;
   align-items: center;
@@ -746,7 +802,8 @@ mark {
 @media (max-width: 980px) {
   .overview-grid,
   .topic-grid,
-  .bottom-grid {
+  .bottom-grid,
+  .warmup-status-grid {
     grid-template-columns: 1fr;
   }
 
@@ -821,7 +878,12 @@ mark {
     gap: 6px;
   }
 
-  .config-inline {
+  .config-inline,
+  .warmup-actions {
     grid-template-columns: 1fr;
+  }
+
+  .warmup-actions {
+    display: grid;
   }
 }
