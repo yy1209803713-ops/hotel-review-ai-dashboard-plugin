@@ -4,7 +4,7 @@ import type { ReviewRecord, TopicEvidenceItem } from '../types/analysis';
 import { cellToText, type RawSdkRecord } from './baseRecords';
 
 export const EVIDENCE_CACHE_TABLE_NAME = 'AI评论证据缓存';
-export const EVIDENCE_CACHE_EXTRACTOR_VERSION = 'evidence-v1.2';
+export const EVIDENCE_CACHE_EXTRACTOR_VERSION = 'evidence-v1.3-topic-quality';
 
 export type EvidenceCacheHit = {
   cacheRecordId: string;

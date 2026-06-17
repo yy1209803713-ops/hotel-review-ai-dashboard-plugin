@@ -1,7 +1,7 @@
 import type { FieldMapping, FilterState } from '../types/config';
 import type { OverviewMetrics, ReviewRecord } from '../types/analysis';
 
-export const ANALYSIS_COPY_VERSION = 'v1.2-conversational-copy';
+export const ANALYSIS_COPY_VERSION = 'v1.3-topic-quality';
 
 export type ScopeSnapshot = {
   filters: FilterState;

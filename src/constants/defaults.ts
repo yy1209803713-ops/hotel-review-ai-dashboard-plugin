@@ -69,6 +69,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
     temperature: 0.2,
     maxBatchSize: 10,
     batchConcurrency: 3,
+    requestTimeoutSeconds: 600,
     topN: 10,
   },
   writeback: {

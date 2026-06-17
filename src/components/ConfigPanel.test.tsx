@@ -15,9 +15,11 @@ vi.mock('@douyinfe/semi-ui', () => ({
   Input: (props: { value?: string; onChange?: (value: string) => void }) => (
     <input value={props.value ?? ''} onChange={(event) => props.onChange?.(event.target.value)} />
   ),
-  InputNumber: (props: { value?: number | null; onChange?: (value: number) => void }) => (
+  InputNumber: (props: { value?: number | null; min?: number; max?: number; onChange?: (value: number) => void }) => (
     <input
       type="number"
+      min={props.min}
+      max={props.max}
       value={props.value ?? ''}
       onChange={(event) => props.onChange?.(Number(event.target.value))}
     />
@@ -185,5 +187,56 @@ describe('ConfigPanel', () => {
     );
 
     expect(screen.getByText('缺少字段映射：评分、评论日期、入住日期、回复内容、房型')).toBeInTheDocument();
+  });
+
+  it('allows configuring AI extraction controls and request timeout without topic merge batch controls', () => {
+    render(
+      <ConfigPanel
+        config={DEFAULT_CONFIG}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
+        saving={false}
+        testingConnection={false}
+        onChange={vi.fn()}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+      />,
+    );
+
+    const numericInputs = screen.getAllByRole('spinbutton');
+    expect(numericInputs[2]).toHaveAttribute('max', '100');
+    expect(numericInputs[3]).toHaveAttribute('max', '100');
+    expect(numericInputs[4]).toHaveAttribute('max', '1200');
+    expect(screen.queryByText('主题合并批次大小')).not.toBeInTheDocument();
+    expect(screen.queryByText('主题合并并发数')).not.toBeInTheDocument();
+  });
+
+  it('emits AI request timeout updates', () => {
+    const onChange = vi.fn();
+    render(
+      <ConfigPanel
+        config={DEFAULT_CONFIG}
+        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
+        categories={[]}
+        dataRanges={[{ type: SourceType.ALL }]}
+        saving={false}
+        testingConnection={false}
+        onChange={onChange}
+        onSave={vi.fn()}
+        onTestConnection={vi.fn()}
+      />,
+    );
+
+    const numericInputs = screen.getAllByRole('spinbutton');
+    fireEvent.change(numericInputs[4], { target: { value: '900' } });
+
+    expect(onChange).toHaveBeenCalledWith({
+      ...DEFAULT_CONFIG,
+      ai: {
+        ...DEFAULT_CONFIG.ai,
+        requestTimeoutSeconds: 900,
+      },
+    });
   });
 });

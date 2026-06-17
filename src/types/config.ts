@@ -35,6 +35,7 @@ export type AiConfig = {
   temperature: number;
   maxBatchSize: number;
   batchConcurrency?: number;
+  requestTimeoutSeconds?: number;
   topN: number;
 };
 

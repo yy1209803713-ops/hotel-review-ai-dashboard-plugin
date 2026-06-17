@@ -81,7 +81,7 @@ describe('evidenceCache', () => {
           '评论 recordId': 'rec3',
           '评论内容 hash': await hashFor(records[2].content),
           模型: 'other-model',
-          抽取规则版本: EVIDENCE_CACHE_EXTRACTOR_VERSION,
+          抽取规则版本: 'evidence-v1.2',
           '证据 JSON': JSON.stringify([evidence('rec3', '新评论', 'positive', '新评论')]),
         }),
       ],
@@ -94,6 +94,7 @@ describe('evidenceCache', () => {
     });
 
     expect(cache.tableId).toBe('cache-table');
+    expect(EVIDENCE_CACHE_EXTRACTOR_VERSION).toBe('evidence-v1.3-topic-quality');
     expect(cache.hits.map((hit) => hit.record.recordId)).toEqual(['rec1']);
     expect(cache.hits[0].evidenceItems).toEqual([evidence('rec1', '位置很好', 'positive', '位置')]);
     expect(cache.misses.map((record) => record.recordId)).toEqual(['rec2', 'rec3']);
@@ -113,6 +114,35 @@ describe('evidenceCache', () => {
       { recordId: 'rec2', reviewId: 'rec2', reason: 'content_hash_mismatch' },
       { recordId: 'rec3', reviewId: 'rec3', reason: 'model_mismatch' },
     ]);
+  });
+
+  it('does not reuse evidence extracted by an old rule version', async () => {
+    const records = [reviewRecord('rec1', '位置很好，服务热情。')];
+    const runtime = fakeRuntime({
+      tables: [{ tableId: 'cache-table', tableName: 'AI评论证据缓存' }],
+      cacheRows: [
+        cacheRow('cache-row-1', {
+          '数据表 ID': 'source-table',
+          '评论 recordId': 'rec1',
+          '评论内容 hash': await hashFor(records[0].content),
+          模型: 'qwen-plus',
+          抽取规则版本: 'evidence-v1.2',
+          '证据 JSON': JSON.stringify([evidence('rec1', '位置很好', 'positive', '位置')]),
+        }),
+      ],
+    });
+
+    const cache = await readEvidenceCache(runtime, {
+      tableId: 'source-table',
+      model: 'qwen-plus',
+      records,
+    });
+
+    expect(cache.hits).toEqual([]);
+    expect(cache.misses).toEqual(records);
+    expect(cache.diagnostics.missReasonCounts).toEqual({
+      extractor_version_mismatch: 1,
+    });
   });
 
   it('diagnoses missing cache table as a cache miss reason', async () => {

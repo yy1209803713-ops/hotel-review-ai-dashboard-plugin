@@ -1004,7 +1004,7 @@ describe('App initialization', () => {
                   'cache-评论 recordId': 'rec-review-a',
                   'cache-评论内容 hash': await hashFor(cachedContent),
                   'cache-模型': DEFAULT_CONFIG.ai.model,
-                  'cache-抽取规则版本': 'evidence-v1.2',
+                  'cache-抽取规则版本': 'evidence-v1.3-topic-quality',
                   'cache-证据 JSON': JSON.stringify([
                     {
                       recordId: 'rec-review-a',
@@ -1046,6 +1046,220 @@ describe('App initialization', () => {
         ],
         cacheMissRecords: [expect.objectContaining({ recordId: 'rec-review-b' })],
       }),
+    );
+  });
+
+  it('reads and saves topic mappings during analysis updates', async () => {
+    const sourceRecords = [
+      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+      optionRecordWithReviewId('a', 'review-b', '表 A 酒店', '2026-06-02 00:00:00'),
+    ];
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
+      ]),
+      getTableList: vi.fn(async () => [
+        { tableId: 'tbl1', tableName: '酒店评论' },
+        { tableId: 'topic-cache', tableName: 'AI评论主题映射缓存' },
+      ]),
+      getFieldMetaList: vi.fn(async (tableId: string) =>
+        tableId === 'topic-cache'
+          ? topicMappingCacheFieldNames.map((fieldName) => ({
+              fieldId: `topic-${fieldName}`,
+              fieldName,
+              fieldType: 'text',
+            }))
+          : [],
+      ),
+      readRecordsPage: vi.fn(async (tableId: string) => {
+        if (tableId === 'topic-cache') {
+          return {
+            records: [
+              {
+                recordId: 'topic-row-1',
+                fields: {
+                  'topic-数据表 ID': 'tbl1',
+                  'topic-候选 sentiment': 'positive',
+                  'topic-候选标签归一化 key': '房间空间',
+                  'topic-候选标签': '房间空间',
+                  'topic-模型': DEFAULT_CONFIG.ai.model,
+                  'topic-主题映射规则版本': 'topic-mapping-v1.0',
+                  'topic-映射 JSON': JSON.stringify({
+                    sourceLabel: '房间空间',
+                    sentiment: 'positive',
+                    mergeKey: '房间空间采光',
+                    category: '房型',
+                    displayTopic: '房间宽敞，采光也好',
+                    summary: '客人认可房间空间和采光。',
+                  }),
+                },
+              },
+            ],
+            hasMore: false,
+          };
+        }
+        return {
+          records: sourceRecords,
+          hasMore: false,
+        };
+      }),
+    });
+
+    analysisPipelineMock.runAnalysis.mockImplementationOnce(async (params) => {
+      const mappings = await params.readTopicMappingsImpl?.({
+        candidates: [
+          {
+            id: 'c001',
+            sourceLabel: '房间空间',
+            sentiment: 'positive',
+            count: 1,
+            quotes: ['房间很大'],
+          },
+          {
+            id: 'c002',
+            sourceLabel: '服务态度',
+            sentiment: 'positive',
+            count: 1,
+            quotes: ['服务热情'],
+          },
+        ],
+      });
+      await params.onTopicMappingUsage?.({
+        cachedMappingCount: mappings?.cachedMappings.length ?? 0,
+        missedCandidateCount: 1,
+        newCandidates: [
+          {
+            id: 'c002',
+            sourceLabel: '服务态度',
+            sentiment: 'positive',
+            count: 1,
+            quotes: ['服务热情'],
+          },
+        ],
+        newGroups: [
+          {
+            mergeKey: '服务态度',
+            sentiment: 'positive',
+            category: '服务',
+            displayTopic: '服务热情，沟通顺畅',
+            summary: '客人认可服务。',
+            members: [
+              {
+                candidateId: 'c002',
+                sourceLabel: '服务态度',
+                acceptedQuotes: ['服务热情'],
+              },
+            ],
+          },
+        ],
+      });
+      return createAnalysisResult(2);
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledWith('topic-cache', expect.any(Object)));
+    expect(runtime.addRecords).toHaveBeenCalledWith(
+      'topic-cache',
+      expect.arrayContaining([
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            'topic-候选标签': '服务态度',
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('saves newly extracted evidence cache before surfacing topic merge failures', async () => {
+    const sourceRecords = [
+      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+    ];
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withAiKey(
+          withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+        ),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      getTableList: vi.fn(async () => [
+        { tableId: 'tbl1', tableName: '酒店评论' },
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: sourceRecords,
+        hasMore: false,
+      })),
+    });
+
+    analysisPipelineMock.runAnalysis.mockImplementationOnce(async (params) => {
+      await params.onCacheUsage?.({
+        cachedEvidenceCount: 0,
+        cachedRecordCount: 0,
+        analyzedRecordCount: 1,
+        newEvidenceItems: [
+          {
+            recordId: 'rec-review-a',
+            quote: '表 A 酒店 评论',
+            sentiment: 'positive',
+            aspectLabel: '新证据',
+          },
+        ],
+      });
+      throw new Error('AI 主题合并失败');
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith(expect.stringContaining('AI 主题合并失败')));
+    expect(runtime.addTable).toHaveBeenCalledWith('AI评论证据缓存', expect.any(Array));
+    expect(runtime.addRecords).toHaveBeenCalledWith(
+      'cache-table',
+      expect.arrayContaining([
+        expect.objectContaining({
+          fields: expect.objectContaining({
+            'cache-数据表 ID': 'tbl1',
+            'cache-评论 recordId': 'rec-review-a',
+            'cache-模型': DEFAULT_CONFIG.ai.model,
+            'cache-抽取规则版本': 'evidence-v1.3-topic-quality',
+            'cache-证据 JSON': JSON.stringify([
+              {
+                recordId: 'rec-review-a',
+                quote: '表 A 酒店 评论',
+                sentiment: 'positive',
+                aspectLabel: '新证据',
+              },
+            ]),
+          }),
+        }),
+      ]),
     );
   });
 
@@ -1861,6 +2075,18 @@ const evidenceCacheFieldNames = [
   '模型',
   '抽取规则版本',
   '证据 JSON',
+  '更新时间',
+  '最近使用时间',
+];
+
+const topicMappingCacheFieldNames = [
+  '数据表 ID',
+  '候选 sentiment',
+  '候选标签归一化 key',
+  '候选标签',
+  '模型',
+  '主题映射规则版本',
+  '映射 JSON',
   '更新时间',
   '最近使用时间',
 ];

@@ -9,13 +9,19 @@ import { getPeriodRange } from './services/filtering';
 import { normalizeReviewRecord, readReviewRecords } from './services/baseRecords';
 import { filterReviews } from './services/filtering';
 import { getMissingRequiredFields, suggestFieldMapping } from './services/fieldMapping';
-import { runAnalysis, type AnalysisCacheUsage } from './services/analysisPipeline';
+import { runAnalysis, type AnalysisCacheUsage, type TopicMappingUsage } from './services/analysisPipeline';
 import { ANALYSIS_COPY_VERSION, buildScopeSnapshot, isCacheStale, type ScopeSnapshot } from './services/stats';
 import { buildHostDataSignal, parseHostVisibleReviewIds } from './services/hostDataScope';
 import { loadPluginConfig, saveAnalysisCache, savePluginConfig } from './services/cacheStore';
 import { writeAnalysisResult } from './services/writeback';
 import { formatAiClientError, testAiConnection } from './services/aiClient';
 import { readEvidenceCache, saveEvidenceCacheEntries, touchEvidenceCacheEntries } from './services/evidenceCache';
+import {
+  readTopicMappingCache,
+  saveTopicMappingCacheEntries,
+  touchTopicMappingCacheEntries,
+  type TopicMappingCacheReadResult,
+} from './services/topicMappingCache';
 import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
 import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
@@ -368,6 +374,8 @@ export default function App() {
         });
       }
       let newEvidenceItems: AnalysisCacheUsage['newEvidenceItems'] = [];
+      let topicMappingUsage: TopicMappingUsage | null = null;
+      let topicMappingCache: TopicMappingCacheReadResult | null = null;
       const result = await measureAnalysisStep(timingRows, 'AI 总耗时', () => runAnalysis({
         records: filtered,
         config: config.ai,
@@ -375,8 +383,105 @@ export default function App() {
         fields: config.source.fields,
         cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
         cacheMissRecords: evidenceCache.misses,
-        onCacheUsage: (usage) => {
+        readTopicMappingsImpl: async ({ candidates }) => {
+          const cache = await measureAnalysisStep(timingRows, '读取主题映射缓存', () => readTopicMappingCache(runtime, {
+            tableId: config.source.tableId,
+            model: config.ai.model,
+            candidates,
+          }), (cache) => ({
+            records: cache.hits.length,
+            detail: `命中 ${cache.hits.length} 个；待归并 ${cache.misses.length} 个`,
+          }));
+          topicMappingCache = cache;
+          logAnalysisDebug('__HOTEL_REVIEW_AI_TOPIC_MAPPING_CACHE_READ__', {
+            scope: {
+              hotelName: filters.hotelName,
+              periodType: filters.periodType,
+              startDate: filters.startDate,
+              endDate: filters.endDate,
+            },
+            diagnostics: cache.diagnostics,
+          });
+          if (cache.tableId && cache.hits.length) {
+            touchTopicMappingCacheEntries(runtime, {
+              cacheTableId: cache.tableId,
+              cacheRecordIds: cache.hits.map((hit) => hit.cacheRecordId),
+            });
+          }
+          return {
+            cachedMappings: cache.hits.map((hit) => hit.mapping),
+            cachedCandidates: cache.hits.map((hit) => hit.candidate),
+          };
+        },
+        onCacheUsage: async (usage) => {
           newEvidenceItems = usage.newEvidenceItems;
+          if (!evidenceCache.misses.length || !usage.newEvidenceItems.length) {
+            return;
+          }
+          try {
+            await measureAnalysisStep(timingRows, '保存证据缓存', () => saveEvidenceCacheEntries(runtime, {
+              tableId: config.source.tableId,
+              model: config.ai.model,
+              records: evidenceCache.misses,
+              evidenceItems: usage.newEvidenceItems,
+            }), () => ({
+              records: evidenceCache.misses.length,
+            }));
+            logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE__', {
+              tableId: config.source.tableId,
+              cacheTableId: evidenceCache.tableId ?? null,
+              savedRecords: evidenceCache.misses.length,
+              savedEvidenceItems: usage.newEvidenceItems.length,
+            });
+          } catch (evidenceCacheError) {
+            logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE_FAIL__', {
+              tableId: config.source.tableId,
+              cacheTableId: evidenceCache.tableId ?? null,
+              savedRecords: evidenceCache.misses.length,
+              savedEvidenceItems: usage.newEvidenceItems.length,
+              error: evidenceCacheError instanceof Error ? evidenceCacheError.message : String(evidenceCacheError),
+            });
+            Toast.warning(
+              evidenceCacheError instanceof Error
+                ? `证据缓存保存失败：${evidenceCacheError.message}`
+                : '证据缓存保存失败，本次结果已保留',
+            );
+          }
+        },
+        onTopicMappingUsage: async (usage) => {
+          topicMappingUsage = usage;
+          if (!usage.newCandidates.length || !usage.newGroups.length) {
+            return;
+          }
+          try {
+            await measureAnalysisStep(timingRows, '保存主题映射缓存', () => saveTopicMappingCacheEntries(runtime, {
+              tableId: config.source.tableId,
+              model: config.ai.model,
+              candidates: usage.newCandidates,
+              groups: usage.newGroups,
+            }), () => ({
+              records: usage.newCandidates.length,
+            }));
+            logAnalysisDebug('__HOTEL_REVIEW_AI_TOPIC_MAPPING_CACHE_SAVE__', {
+              tableId: config.source.tableId,
+              cacheTableId: topicMappingCache?.tableId ?? null,
+              savedCandidates: usage.newCandidates.length,
+              savedGroups: usage.newGroups.length,
+            });
+          } catch (topicMappingCacheError) {
+            logAnalysisDebug('__HOTEL_REVIEW_AI_TOPIC_MAPPING_CACHE_SAVE_FAIL__', {
+              tableId: config.source.tableId,
+              cacheTableId: topicMappingCache?.tableId ?? null,
+              savedCandidates: usage.newCandidates.length,
+              savedGroups: usage.newGroups.length,
+              error: topicMappingCacheError instanceof Error ? topicMappingCacheError.message : String(topicMappingCacheError),
+            });
+            Toast.warning(
+              topicMappingCacheError instanceof Error
+                ? `主题映射缓存保存失败：${topicMappingCacheError.message}`
+                : '主题映射缓存保存失败，本次结果已保留',
+            );
+          }
         },
         onBatchTiming: (timing) => {
           timingRows.push({
@@ -401,37 +506,17 @@ export default function App() {
         newEvidenceCount: newEvidenceItems.length,
         newEvidenceRecordIds: newEvidenceItems.map((item) => item.recordId),
       });
-      if (evidenceCache.misses.length) {
-        try {
-          await measureAnalysisStep(timingRows, '保存证据缓存', () => saveEvidenceCacheEntries(runtime, {
-            tableId: config.source.tableId,
-            model: config.ai.model,
-            records: evidenceCache.misses,
-            evidenceItems: newEvidenceItems,
-          }), () => ({
-            records: evidenceCache.misses.length,
-          }));
-          logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE__', {
-            tableId: config.source.tableId,
-            cacheTableId: evidenceCache.tableId ?? null,
-            savedRecords: evidenceCache.misses.length,
-            savedEvidenceItems: newEvidenceItems.length,
-          });
-        } catch (evidenceCacheError) {
-          logAnalysisDebug('__HOTEL_REVIEW_AI_CACHE_SAVE_FAIL__', {
-            tableId: config.source.tableId,
-            cacheTableId: evidenceCache.tableId ?? null,
-            savedRecords: evidenceCache.misses.length,
-            savedEvidenceItems: newEvidenceItems.length,
-            error: evidenceCacheError instanceof Error ? evidenceCacheError.message : String(evidenceCacheError),
-          });
-          Toast.warning(
-            evidenceCacheError instanceof Error
-              ? `证据缓存保存失败：${evidenceCacheError.message}`
-              : '证据缓存保存失败，本次结果已保留',
-          );
-        }
-      }
+      const mappingUsage = topicMappingUsage as TopicMappingUsage | null;
+      const mappingCache = topicMappingCache as TopicMappingCacheReadResult | null;
+      logAnalysisDebug('__HOTEL_REVIEW_AI_TOPIC_MAPPING_CACHE_USAGE__', {
+        cachedMappingCount: mappingUsage?.cachedMappingCount ?? mappingCache?.hits.length ?? 0,
+        missedCandidateCount: mappingUsage?.missedCandidateCount ?? mappingCache?.misses.length ?? 0,
+        newCandidateLabels: mappingUsage?.newCandidates.map((candidate) => ({
+          sourceLabel: candidate.sourceLabel,
+          sentiment: candidate.sentiment,
+        })) ?? [],
+        newGroupCount: mappingUsage?.newGroups.length ?? 0,
+      });
       const cache: AnalysisCache = {
         result,
         scopeSnapshot: scope,

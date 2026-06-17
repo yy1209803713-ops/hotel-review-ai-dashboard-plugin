@@ -16,6 +16,7 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.ai.apiBaseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
     expect(DEFAULT_CONFIG.ai.model).toBe('qwen-plus');
     expect(DEFAULT_CONFIG.ai.apiKey).toBe('');
+    expect(DEFAULT_CONFIG.ai.requestTimeoutSeconds).toBe(600);
   });
 
   it('keeps the first version category taxonomy fixed', () => {

@@ -87,7 +87,7 @@ describe('scope snapshots', () => {
       filters,
       fields,
       model: 'gpt-4o-mini',
-      analysisCopyVersion: 'v1.2-conversational-copy',
+      analysisCopyVersion: 'v1.3-topic-quality',
       totalReviews: 3,
       firstRecordId: 'rec1',
       lastRecordId: 'rec3',

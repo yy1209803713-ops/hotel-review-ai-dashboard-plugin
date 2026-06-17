@@ -149,7 +149,7 @@ export function ConfigPanel(props: {
             <InputNumber
               value={props.config.ai.maxBatchSize}
               min={10}
-              max={200}
+              max={100}
               onChange={(value) => updateAi({ maxBatchSize: typeof value === 'number' ? value : 10 })}
             />
           </Field>
@@ -157,8 +157,16 @@ export function ConfigPanel(props: {
             <InputNumber
               value={props.config.ai.batchConcurrency ?? 3}
               min={1}
-              max={20}
+              max={100}
               onChange={(value) => updateAi({ batchConcurrency: typeof value === 'number' ? value : 3 })}
+            />
+          </Field>
+          <Field label="请求超时秒数">
+            <InputNumber
+              value={props.config.ai.requestTimeoutSeconds ?? 600}
+              min={30}
+              max={1200}
+              onChange={(value) => updateAi({ requestTimeoutSeconds: typeof value === 'number' ? value : 600 })}
             />
           </Field>
         </section>
