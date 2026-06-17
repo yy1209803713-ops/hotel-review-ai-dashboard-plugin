@@ -10,6 +10,7 @@
     "build": "tsc && vite build",
     "test": "vitest",
     "test:watch": "vitest --watch",
+    "server": "vite-node server/index.ts",
     "preview": "vite preview"
   },
   "dependencies": {

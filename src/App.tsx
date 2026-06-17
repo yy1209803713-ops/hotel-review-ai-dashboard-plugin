@@ -23,7 +23,13 @@ import {
   type TopicMappingCacheReadResult,
 } from './services/topicMappingCache';
 import { triggerWarmup } from './services/warmupClient';
-import { runtime as defaultRuntime, type DashboardRuntime, type RuntimeCategory, type RuntimeTable } from './runtime/sdk';
+import {
+  runtime as defaultRuntime,
+  type DashboardRuntime,
+  type DashboardStateName,
+  type RuntimeCategory,
+  type RuntimeTable,
+} from './runtime/sdk';
 import type { AnalysisCache, FieldMapping, FilterState, PeriodType, PluginConfig } from './types/config';
 import type { AnalysisResult, ReviewRecord, TopicSummary } from './types/analysis';
 import type { WarmupMode, WarmupResponse } from './services/warmup';
@@ -47,6 +53,7 @@ export default function App() {
   const [categories, setCategories] = useState<RuntimeCategory[]>([]);
   const [dataRanges, setDataRanges] = useState<IDataRange[]>([]);
   const [loading, setLoading] = useState(true);
+  const [analysisRunning, setAnalysisRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [warmupRunning, setWarmupRunning] = useState(false);
@@ -59,6 +66,7 @@ export default function App() {
   const [reloadToken, setReloadToken] = useState(0);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
+  const configRef = useRef(config);
   const mountedRef = useRef(true);
   const isCurrentConfigSourceRequest = (requestId?: number) =>
     mountedRef.current && (requestId === undefined || configSourceRequestId.current === requestId);
@@ -71,6 +79,10 @@ export default function App() {
       mountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
 
   useEffect(() => {
     const previousThemeMode = document.documentElement.getAttribute('theme-mode');
@@ -104,10 +116,15 @@ export default function App() {
       );
       runtime.setRendered();
     });
-    const unsubscribeConfig = runtime.onConfigChange(() => {
+    const unsubscribeConfig = runtime.onConfigChange((configSnapshot) => {
       if (!mountedRef.current || state === 'Create') {
         return;
       }
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_CHANGE_EVENT__', 'host', {
+        state,
+        reloadToken,
+        runtimeConfig: configSnapshot,
+      });
       setReloadToken((current) => current + 1);
     });
 
@@ -192,6 +209,11 @@ export default function App() {
 
     async function initializeConfigState() {
       const pluginConfig = await loadPluginConfig(runtime);
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_LOAD__', 'init-config', {
+        state,
+        reloadToken,
+        pluginConfig,
+      });
       if (!mountedRef.current) {
         return;
       }
@@ -211,6 +233,11 @@ export default function App() {
 
     async function initializeDisplayState() {
       const pluginConfig = await loadPluginConfig(runtime);
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_LOAD__', 'init-display', {
+        state,
+        reloadToken,
+        pluginConfig,
+      });
       if (!mountedRef.current) {
         return;
       }
@@ -333,6 +360,7 @@ export default function App() {
     }
 
     setLoading(true);
+    setAnalysisRunning(true);
     Toast.info('开始读取评论并更新 AI 聚合分析');
 
     try {
@@ -535,7 +563,28 @@ export default function App() {
         sourceSnapshotBytes: new TextEncoder().encode(JSON.stringify(config.source)).length,
       });
 
+      const analysisCacheTraceId = createAnalysisCacheTraceId();
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_BEGIN__', 'analysis-cache', {
+        traceId: analysisCacheTraceId,
+        state,
+        filters,
+        pluginConfig: {
+          ...config,
+          filters,
+          analysisCache: cache,
+        },
+      });
       await measureAnalysisStep(timingRows, '保存缓存', () => saveAnalysisCache(runtime, cache));
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_END__', 'analysis-cache', {
+        traceId: analysisCacheTraceId,
+        state,
+        filters,
+        pluginConfig: {
+          ...config,
+          filters,
+          analysisCache: cache,
+        },
+      });
       try {
         const writeback = await measureAnalysisStep(timingRows, '写回', () => writeAnalysisResult(runtime, result, config.writeback), (writeback) => {
           if (writeback.status === 'skipped') {
@@ -570,6 +619,7 @@ export default function App() {
     } finally {
       publishAnalysisTimingReport(timingRows, getNowMs() - runStartedAt);
       setLoading(false);
+      setAnalysisRunning(false);
       runtime.setRendered();
     }
   }
@@ -726,7 +776,18 @@ export default function App() {
     const configToSave = { ...config, filters };
     const sourceRequestId = configSourceRequestId.current;
     try {
+      const manualSaveTraceId = createAnalysisCacheTraceId();
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_BEGIN__', 'manual-config', {
+        traceId: manualSaveTraceId,
+        state,
+        configToSave,
+      });
       await savePluginConfig(runtime, configToSave);
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_END__', 'manual-config', {
+        traceId: manualSaveTraceId,
+        state,
+        configToSave,
+      });
       loadFilterOptionRecords(configToSave, sourceRequestId).catch(() => undefined);
       Toast.success('配置已保存');
     } catch (cause) {
@@ -861,18 +922,53 @@ export default function App() {
   }
 
   function handleFilterChange(nextFilters: FilterState) {
+    applyFilterSelection(nextFilters);
+  }
+
+  function applyFilterSelection(nextFilters: FilterState) {
+    const nextConfig = { ...configRef.current, filters: nextFilters };
+    configRef.current = nextConfig;
     setFilters(nextFilters);
+    setConfig(nextConfig);
     if (analysis) {
-      setCurrentScope(buildCurrentScope(config, hostData, currentScope, nextFilters));
+      setCurrentScope(buildCurrentScope(nextConfig, hostData, currentScope, nextFilters));
+    }
+    if (!isConfigMode && !loading && !saving) {
+      const displayFilterSaveTraceId = createAnalysisCacheTraceId();
+      debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_BEGIN__', 'display-filter', {
+        traceId: displayFilterSaveTraceId,
+        state,
+        loading,
+        saving,
+        nextConfig,
+      });
+      savePluginConfig(runtime, nextConfig).then(() => {
+        debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_END__', 'display-filter', {
+          traceId: displayFilterSaveTraceId,
+          state,
+          nextConfig,
+        });
+      }).catch((cause) => {
+        debugAnalysisCacheConfig('__HOTEL_REVIEW_AI_CONFIG_SAVE_FAIL__', 'display-filter', {
+          traceId: displayFilterSaveTraceId,
+          state,
+          nextConfig,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+        const message = cause instanceof Error ? cause.message : '保存筛选配置失败';
+        setError(message);
+        Toast.error(message);
+      });
     }
   }
 
   function handlePeriodChange(periodType: PeriodType) {
     if (periodType === 'custom') {
-      setFilters((current) => ({ ...current, periodType }));
+      applyFilterSelection({ ...filters, periodType });
       return;
     }
-    setFilters((current) => ({ ...current, periodType, ...getPeriodRange(periodType) }));
+    const range = getPeriodRange(periodType);
+    applyFilterSelection({ ...filters, periodType, ...range });
   }
 
   const shell = (
@@ -887,6 +983,7 @@ export default function App() {
       evidencePageSize={EVIDENCE_PAGE_SIZE}
       evidenceLoading={evidenceLoading}
       loading={loading}
+      analysisRunning={analysisRunning}
       error={error}
       scopeWarning={scopeWarning}
       stale={stale}
@@ -1221,6 +1318,100 @@ function logAnalysisDebug(label: string, payload: unknown): void {
     return;
   }
   console.info(label, JSON.stringify(payload));
+}
+
+function debugAnalysisCacheConfig(
+  label: string,
+  source: string,
+  payload: {
+    traceId?: string;
+    state?: DashboardStateName;
+    reloadToken?: number;
+    loading?: boolean;
+    saving?: boolean;
+    filters?: FilterState;
+    pluginConfig?: PluginConfig;
+    configToSave?: PluginConfig;
+    nextConfig?: PluginConfig;
+    runtimeConfig?: unknown;
+    error?: string;
+  },
+): void {
+  const pluginConfig = payload.pluginConfig ?? payload.configToSave ?? payload.nextConfig ?? getRuntimePluginConfig(payload.runtimeConfig);
+  const analysisCache = pluginConfig?.analysisCache;
+  const filters = payload.filters ?? pluginConfig?.filters;
+  logAnalysisDebug(label, {
+    source,
+    traceId: payload.traceId ?? createAnalysisCacheTraceId(),
+    state: payload.state,
+    reloadToken: payload.reloadToken,
+    loading: payload.loading,
+    saving: payload.saving,
+    hasAnalysisCache: Boolean(analysisCache),
+    cache: summarizeAnalysisCache(analysisCache),
+    filters: filters ? summarizeFilters(filters) : undefined,
+    sourceConfig: pluginConfig
+      ? {
+          tableId: pluginConfig.source.tableId,
+          viewId: pluginConfig.source.viewId,
+          dataRangeType: pluginConfig.source.dataRange?.type,
+        }
+      : undefined,
+    runtimeConfigHasCustomConfig: hasRuntimeCustomConfig(payload.runtimeConfig),
+    error: payload.error,
+  });
+}
+
+function getRuntimePluginConfig(runtimeConfig: unknown): PluginConfig | undefined {
+  if (!runtimeConfig || typeof runtimeConfig !== 'object') {
+    return undefined;
+  }
+  const customConfig = (runtimeConfig as { customConfig?: unknown }).customConfig;
+  if (!customConfig || typeof customConfig !== 'object') {
+    return undefined;
+  }
+  return customConfig as PluginConfig;
+}
+
+function hasRuntimeCustomConfig(runtimeConfig: unknown): boolean | undefined {
+  if (!runtimeConfig || typeof runtimeConfig !== 'object') {
+    return undefined;
+  }
+  return Boolean((runtimeConfig as { customConfig?: unknown }).customConfig);
+}
+
+function summarizeAnalysisCache(analysisCache: AnalysisCache | undefined) {
+  if (!analysisCache) {
+    return undefined;
+  }
+  return {
+    analysisId: analysisCache.result.analysisId,
+    resultGeneratedAt: analysisCache.result.generatedAt,
+    cacheGeneratedAt: analysisCache.generatedAt,
+    model: analysisCache.model,
+    totalReviews: analysisCache.result.overview.totalReviews,
+    positiveTopicCount: analysisCache.result.positiveTopics.length,
+    negativeTopicCount: analysisCache.result.negativeTopics.length,
+    bytes: new TextEncoder().encode(JSON.stringify(analysisCache)).length,
+  };
+}
+
+function summarizeFilters(filters: FilterState) {
+  return {
+    hotelName: filters.hotelName,
+    periodType: filters.periodType,
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    checkInMonth: filters.checkInMonth,
+    minScore: filters.minScore,
+    maxScore: filters.maxScore,
+    replyStatus: filters.replyStatus,
+    keyword: filters.keyword,
+  };
+}
+
+function createAnalysisCacheTraceId(): string {
+  return `${new Date().toISOString()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function getNowMs(): number {

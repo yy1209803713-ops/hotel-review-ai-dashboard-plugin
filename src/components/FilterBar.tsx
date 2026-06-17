@@ -1,5 +1,12 @@
 import { Button, Input, InputNumber, Select } from '@douyinfe/semi-ui';
+import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone';
+import utc from 'dayjs/plugin/utc';
+import { TIME_ZONE } from '../services/filtering';
 import type { FilterState, PeriodType } from '../types/config';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 export function FilterBar(props: {
   filters: FilterState;
@@ -34,22 +41,21 @@ export function FilterBar(props: {
           </button>
         ))}
       </div>
-      {props.filters.periodType === 'custom' ? (
-        <>
-          <Input
-            value={props.filters.startDate}
-            placeholder="开始日期"
-            style={{ width: 118 }}
-            onChange={(value) => update({ startDate: value })}
-          />
-          <Input
-            value={props.filters.endDate}
-            placeholder="结束日期"
-            style={{ width: 118 }}
-            onChange={(value) => update({ endDate: value })}
-          />
-        </>
-      ) : null}
+      <div className="date-range-controls">
+        <Input
+          value={props.filters.startDate}
+          placeholder="开始日期"
+          style={{ width: 118 }}
+          onChange={(value) => update({ periodType: 'custom', startDate: value })}
+        />
+        <span className="date-range-separator">至</span>
+        <Input
+          value={props.filters.endDate}
+          placeholder="结束日期"
+          style={{ width: 118 }}
+          onChange={(value) => update({ periodType: 'custom', endDate: value })}
+        />
+      </div>
       <Select
         filter
         value={props.filters.checkInMonth}
@@ -95,5 +101,9 @@ const periodLabel: Record<PeriodType, string> = {
 };
 
 function formatDate(value: string): string {
-  return value.replace('T', ' ').slice(0, 16);
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) {
+    return value.replace('T', ' ').slice(0, 16);
+  }
+  return parsed.tz(TIME_ZONE).format('YYYY-MM-DD HH:mm');
 }

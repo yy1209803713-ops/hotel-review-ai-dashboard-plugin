@@ -112,6 +112,7 @@ vi.mock('lottie-web', () => ({
 
 const { default: App } = await import('./App');
 const { Toast } = await import('@douyinfe/semi-ui');
+const { getPeriodRange } = await import('./services/filtering');
 
 describe('App initialization', () => {
   beforeEach(() => {
@@ -465,6 +466,267 @@ describe('App initialization', () => {
     );
     expect(await screen.findByText('缓存预热状态')).toBeInTheDocument();
     expect(Toast.success).toHaveBeenCalledWith('缓存预热完成：新增证据 1 条，新增主题映射 1 条');
+  });
+
+  it('persists dashboard filter selections when they change', async () => {
+    const savedConfig = withSource({
+      tableId: 'tbl1',
+      fields: optionFieldMapping('a'),
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: savedConfig,
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+          optionRecordWithReviewId('a', 'review-b', '表 B 酒店', '2026-06-01 00:00:00'),
+        ],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('表 B 酒店')).toBeInTheDocument());
+    fireEvent.change(screen.getByDisplayValue('全部酒店'), { target: { value: '表 B 酒店' } });
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customConfig: expect.objectContaining({
+          filters: expect.objectContaining({
+            hotelName: '表 B 酒店',
+          }),
+          source: expect.objectContaining({
+            tableId: 'tbl1',
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('shows date range inputs for preset periods', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    expect(await screen.findByPlaceholderText('开始日期')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('结束日期')).toBeInTheDocument();
+  });
+
+  it('fills and persists preset date ranges when selecting week', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+    const expectedRange = getPeriodRange('week');
+
+    render(<App />);
+
+    await screen.findByPlaceholderText('开始日期');
+    fireEvent.click(screen.getByText('本周'));
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(screen.getByPlaceholderText('开始日期')).toHaveValue(expectedRange.startDate);
+    expect(screen.getByPlaceholderText('结束日期')).toHaveValue(expectedRange.endDate);
+    expect(runtime.saveConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        customConfig: expect.objectContaining({
+          filters: expect.objectContaining({
+            periodType: 'week',
+            startDate: expectedRange.startDate,
+            endDate: expectedRange.endDate,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('does not show the AI background update state when a filter config save triggers reload', async () => {
+    let configChangeHandler: ((config: unknown) => void) | undefined;
+    const savedConfig = {
+      ...withSource({
+        tableId: 'tbl1',
+        fields: optionFieldMapping('a'),
+      }),
+      ai: {
+        ...DEFAULT_CONFIG.ai,
+        apiKey: 'sk-test',
+      },
+      analysisCache: {
+        result: createAnalysisResult(1),
+        scopeSnapshot: {
+          filters: DEFAULT_CONFIG.filters,
+          fields: optionFieldMapping('a'),
+          model: DEFAULT_CONFIG.ai.model,
+          analysisCopyVersion: 'v1.2-conversational-copy',
+          totalReviews: 1,
+          firstRecordId: 'rec-review-a',
+          lastRecordId: 'rec-review-a',
+          source: {
+            tableId: 'tbl1',
+            dataRange: undefined,
+            hostDataSignal: 'host-visible-review-ids:review-a',
+          },
+        },
+        sourceSnapshot: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }).source,
+        model: DEFAULT_CONFIG.ai.model,
+        generatedAt: '2026-06-17T00:00:00.000Z',
+      },
+    };
+    const reloadGate = deferred<void>();
+    let configReadCount = 0;
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => {
+        configReadCount += 1;
+        if (configReadCount > 1) {
+          await reloadGate.promise;
+        }
+        return {
+          dataConditions: [],
+          customConfig: savedConfig,
+        };
+      }),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      onConfigChange: vi.fn((handler) => {
+        configChangeHandler = handler as (config: unknown) => void;
+        return () => undefined;
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+        ],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
+    fireEvent.click(screen.getByText('本周'));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    act(() => {
+      configChangeHandler?.({ dataConditions: [], customConfig: savedConfig });
+    });
+
+    await waitFor(() => expect(runtime.getConfig).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).not.toBeInTheDocument();
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
+    expect(screen.getByText('更新分析')).not.toHaveAttribute('loading');
+
+    await act(async () => {
+      reloadGate.resolve();
+      await reloadGate.promise;
+    });
+  });
+
+  it('renders last analysis time in Beijing local time', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          ai: {
+            ...DEFAULT_CONFIG.ai,
+            apiKey: 'sk-test',
+          },
+          analysisCache: {
+            result: {
+              ...createAnalysisResult(1),
+              generatedAt: '2026-06-17T00:00:00.000Z',
+            },
+            scopeSnapshot: {
+              filters: DEFAULT_CONFIG.filters,
+              fields: optionFieldMapping('a'),
+              model: DEFAULT_CONFIG.ai.model,
+              analysisCopyVersion: 'v1.2-conversational-copy',
+              totalReviews: 1,
+              firstRecordId: 'rec-review-a',
+              lastRecordId: 'rec-review-a',
+              source: {
+                tableId: 'tbl1',
+                dataRange: undefined,
+                hostDataSignal: 'host-visible-review-ids:review-a',
+              },
+            },
+            sourceSnapshot: withSource({
+              tableId: 'tbl1',
+              fields: optionFieldMapping('a'),
+            }).source,
+            model: DEFAULT_CONFIG.ai.model,
+            generatedAt: '2026-06-17T00:00:00.000Z',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
+    expect(screen.getByText('上次分析：2026-06-17 08:00')).toBeInTheDocument();
   });
 
   it('shows backend stage and message when cache warmup fails', async () => {

@@ -20,6 +20,7 @@ export function DashboardShell(props: {
   evidencePageSize: number;
   evidenceLoading: boolean;
   loading: boolean;
+  analysisRunning: boolean;
   error: string | null;
   scopeWarning: string | null;
   stale: boolean;
@@ -47,7 +48,7 @@ export function DashboardShell(props: {
           filters={props.filters}
           hotelOptions={props.hotelOptions}
           checkInMonthOptions={props.checkInMonthOptions}
-          loading={props.loading}
+          loading={props.analysisRunning}
           lastGeneratedAt={props.analysis?.generatedAt}
           onChange={props.onFilterChange}
           onPeriodChange={props.onPeriodChange}
@@ -58,8 +59,10 @@ export function DashboardShell(props: {
           {props.scopeWarning ? <WarningBanner message={props.scopeWarning} /> : null}
           {props.stale ? <StaleBanner /> : null}
           {props.warmupStatus ? <CacheWarmupStatus {...props.warmupStatus} /> : null}
-          {props.loading && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
-          {props.loading && props.analysis ? <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact /> : null}
+          {props.analysisRunning && !props.analysis ? <LoadingPanel message="正在读取评论并进行 AI 聚合分析..." /> : null}
+          {props.analysisRunning && props.analysis ? (
+            <LoadingPanel message="正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。" compact />
+          ) : null}
           {!props.loading && !props.analysis ? <EmptyState onUpdate={props.onUpdate} /> : null}
           {props.analysis ? (
             <>

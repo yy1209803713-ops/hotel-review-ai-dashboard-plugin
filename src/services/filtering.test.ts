@@ -77,17 +77,17 @@ describe('parseReviewDate', () => {
 });
 
 describe('getPeriodRange', () => {
-  it('uses Monday as the first day of week', () => {
+  it('calculates the trailing week ending today in Asia/Shanghai', () => {
     expect(getPeriodRange('week', '2026-06-03T10:00:00+08:00')).toEqual({
-      startDate: '2026-06-01',
-      endDate: '2026-06-07',
+      startDate: '2026-05-27',
+      endDate: '2026-06-03',
     });
   });
 
-  it('calculates month boundaries in Asia/Shanghai', () => {
+  it('calculates the trailing month ending today in Asia/Shanghai', () => {
     expect(getPeriodRange('month', '2026-06-03T10:00:00+08:00')).toEqual({
-      startDate: '2026-06-01',
-      endDate: '2026-06-30',
+      startDate: '2026-05-03',
+      endDate: '2026-06-03',
     });
   });
 });

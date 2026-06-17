@@ -1,0 +1,197 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createLarkOpenApiRuntime } from './larkOpenApiRuntime';
+
+describe('createLarkOpenApiRuntime', () => {
+  it('uses tenant access token and maps Base tables, fields, and records into DashboardRuntime shape', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer tenant-token' });
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [{ table_id: 'tbl-review', name: '酒店评论' }],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/fields?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [
+              { field_id: 'fld-review-id', field_name: '评论ID', type: 1 },
+              { field_id: 'fld-content', field_name: '评论内容', type: 1 },
+            ],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/records?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [
+              {
+                record_id: 'rec1',
+                fields: {
+                  评论ID: 'R001',
+                  评论内容: '位置很好',
+                },
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
+    await expect(runtime.getFieldMetaList('tbl-review')).resolves.toEqual([
+      { fieldId: 'fld-review-id', fieldName: '评论ID', fieldType: 1 },
+      { fieldId: 'fld-content', fieldName: '评论内容', fieldType: 1 },
+    ]);
+    await expect(runtime.readRecordsPage('tbl-review', { pageSize: 50 })).resolves.toEqual({
+      records: [
+        {
+          recordId: 'rec1',
+          fields: {
+            'fld-review-id': 'R001',
+            'fld-content': '位置很好',
+            评论ID: 'R001',
+            评论内容: '位置很好',
+          },
+        },
+      ],
+      hasMore: false,
+      pageToken: undefined,
+    });
+  });
+
+  it('converts DashboardRuntime table and record writes to Feishu OpenAPI payloads', async () => {
+    const seenBodies: unknown[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables') {
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ code: 0, msg: 'success', data: { table_id: 'tbl-cache' } });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [
+              { field_id: 'fld-model', field_name: '模型', type: 1 },
+              { field_id: 'fld-json', field_name: '证据 JSON', type: 1 },
+            ],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_create')) {
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            records: [{ record_id: 'rec-cache-1' }],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_update')) {
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            records: [{ record_id: 'rec-cache-1' }],
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.addTable('AI评论证据缓存', [{ name: '模型', type: 1 }])).resolves.toEqual({
+      tableId: 'tbl-cache',
+    });
+    await expect(
+      runtime.addRecords('tbl-cache', [
+        {
+          fields: {
+            'fld-model': 'qwen-plus',
+            'fld-json': '[]',
+          },
+        },
+      ]),
+    ).resolves.toEqual(['rec-cache-1']);
+    await expect(
+      runtime.setRecords('tbl-cache', [
+        {
+          recordId: 'rec-cache-1',
+          fields: {
+            'fld-model': 'qwen-plus',
+          },
+        },
+      ]),
+    ).resolves.toEqual([{ recordId: 'rec-cache-1' }]);
+
+    expect(seenBodies).toEqual([
+      {
+        table: {
+          name: 'AI评论证据缓存',
+          fields: [{ field_name: '模型', type: 1 }],
+        },
+      },
+      {
+        records: [
+          {
+            fields: {
+              模型: 'qwen-plus',
+              '证据 JSON': '[]',
+            },
+          },
+        ],
+      },
+      {
+        records: [
+          {
+            record_id: 'rec-cache-1',
+            fields: {
+              模型: 'qwen-plus',
+            },
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}

@@ -63,17 +63,16 @@ export function getPeriodRange(
   }
 
   if (periodType === 'week') {
-    const mondayOffset = (current.day() + 6) % 7;
-    const start = current.startOf('day').subtract(mondayOffset, 'day');
+    const start = current.startOf('day').subtract(7, 'day');
     return {
       startDate: start.format('YYYY-MM-DD'),
-      endDate: start.add(6, 'day').format('YYYY-MM-DD'),
+      endDate: current.format('YYYY-MM-DD'),
     };
   }
 
   return {
-    startDate: current.startOf('month').format('YYYY-MM-DD'),
-    endDate: current.endOf('month').format('YYYY-MM-DD'),
+    startDate: current.startOf('day').subtract(1, 'month').format('YYYY-MM-DD'),
+    endDate: current.format('YYYY-MM-DD'),
   };
 }
 
