@@ -319,7 +319,11 @@ export function createLarkRuntime(): DashboardRuntime {
     },
     readRecordsByIds: async (tableId, recordIds) => {
       const table = await bitable.base.getTableById(tableId);
-      return (await table.getRecordsByIds(recordIds)) as RawSdkRecord[];
+      const records = (await table.getRecordsByIds(recordIds)) as Array<Partial<RawSdkRecord> & { fields: RawSdkRecord['fields'] }>;
+      return records.map((record, index) => ({
+        recordId: typeof record.recordId === 'string' ? record.recordId : recordIds[index],
+        fields: record.fields,
+      }));
     },
     canEditBase: () =>
       bitable.base.getPermission({
