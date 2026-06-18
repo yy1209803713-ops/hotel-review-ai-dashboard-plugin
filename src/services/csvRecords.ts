@@ -1,7 +1,7 @@
 import { FIXTURE_SOURCE_CONFIG } from '../fixtures/dashboardSource';
 import type { RawSdkRecord } from './baseRecords';
 
-export const LOCAL_CSV_DATASET_PATH = '/hotel_xx_comments_25_merged_with_names.csv';
+export const LOCAL_CSV_DATASET_PATH = './hotel_xx_comments_25_merged_with_names.csv';
 
 const CSV_HEADER_TO_FIELD = {
   reviewId: '评论ID',
