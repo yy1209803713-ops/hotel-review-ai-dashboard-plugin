@@ -11,12 +11,24 @@
 - 配置面板新增 `缓存预热` 区域，提供 `初始化缓存` 和 `立即预热` 两个按钮。
 - Dashboard 内容区新增 `缓存预热状态`，展示证据缓存覆盖、待补评论、主题映射覆盖、上次状态和错误 stage/message。
 - 定时预热仍由飞书 Workflow 或外部调度调用后端接口，Dashboard 插件前端不承载 cron。
+- 仓库根目录支持 `.env.local`，可本地填写 `LARK_APP_ID`、`LARK_APP_SECRET`、`WARMUP_SECRET` 和 `VITE_BACKEND_ENDPOINT_URL`；其中前两个只给后端进程使用，`VITE_BACKEND_ENDPOINT_URL` 只用于前端默认填充 `Backend Endpoint`。
 
 后端边界：
 
 - 当前仓库没有后端 API 宿主。
 - 当前实现已准备 `POST /api/hotel-review-ai/warmup` 的请求/响应契约和插件触发入口。
 - 真正的 Base 读写、AI API 密钥、Workflow 调度和 job log 由后端部署层承接。
+
+## 本地配置约定
+
+仓库根目录支持 `.env.local`，本地可填写：
+
+- `LARK_APP_ID`
+- `LARK_APP_SECRET`
+- `WARMUP_SECRET`
+- `VITE_BACKEND_ENDPOINT_URL`
+
+其中 `LARK_APP_ID` / `LARK_APP_SECRET` 只给后端进程使用，`VITE_BACKEND_ENDPOINT_URL` 只用于前端默认填充 `Backend Endpoint`。
 
 Workflow 配置说明见：
 

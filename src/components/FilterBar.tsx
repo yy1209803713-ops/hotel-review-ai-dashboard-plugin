@@ -13,10 +13,13 @@ export function FilterBar(props: {
   hotelOptions: string[];
   checkInMonthOptions: string[];
   loading: boolean;
+  exportDisabled?: boolean;
+  exporting?: boolean;
   lastGeneratedAt?: string;
   onChange: (filters: FilterState) => void;
   onPeriodChange: (periodType: PeriodType) => void;
   onUpdate: () => void;
+  onExportBaseSummary?: () => void;
 }) {
   const update = (patch: Partial<FilterState>) => props.onChange({ ...props.filters, ...patch });
 
@@ -88,6 +91,16 @@ export function FilterBar(props: {
       <Button theme="solid" loading={props.loading} onClick={props.onUpdate}>
         更新分析
       </Button>
+      {props.onExportBaseSummary ? (
+        <Button
+          icon={<span aria-hidden="true">↓</span>}
+          disabled={props.exportDisabled}
+          loading={props.exporting}
+          onClick={props.onExportBaseSummary}
+        >
+          导出摘要
+        </Button>
+      ) : null}
       <span className="last-run">{props.lastGeneratedAt ? `上次分析：${formatDate(props.lastGeneratedAt)}` : '尚未分析'}</span>
     </div>
   );

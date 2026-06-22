@@ -1,4 +1,4 @@
-import { Banner, Button, Input, InputNumber, Select, Switch } from '@douyinfe/semi-ui';
+import { Banner, Button, Input, Select } from '@douyinfe/semi-ui';
 import { SourceType, type IDataRange } from '@lark-base-open/js-sdk';
 import { DEFAULT_CONFIG, FIELD_LABELS } from '../constants/defaults';
 import type { RuntimeCategory, RuntimeTable } from '../runtime/sdk';
@@ -11,19 +11,12 @@ export function ConfigPanel(props: {
   categories: RuntimeCategory[];
   dataRanges: IDataRange[];
   saving: boolean;
-  testingConnection: boolean;
-  warmupRunning: boolean;
   disabled?: boolean;
   onChange: (config: PluginConfig) => void;
   onSave: () => void;
-  onTestConnection: () => void;
-  onWarmupBootstrap: () => void;
-  onWarmupIncremental: () => void;
 }) {
   const update = (patch: Partial<PluginConfig>) => props.onChange({ ...props.config, ...patch });
   const updateAi = (patch: Partial<PluginConfig['ai']>) => update({ ai: { ...props.config.ai, ...patch } });
-  const updateWarmup = (patch: Partial<PluginConfig['warmup']>) =>
-    update({ warmup: { ...props.config.warmup, ...patch } });
   const updateSource = (patch: Partial<PluginConfig['source']>) => update({ source: { ...props.config.source, ...patch } });
   const updateFields = (key: keyof PluginConfig['source']['fields'], value: string) =>
     updateSource({ fields: { ...props.config.source.fields, [key]: value } });
@@ -96,169 +89,39 @@ export function ConfigPanel(props: {
 
         <section className="config-section">
           <div className="config-section-head">
-            <h3>AI API</h3>
+            <h3>后端分析服务</h3>
           </div>
           <Banner
             type="warning"
             closeIcon={null}
-            description="API Key 直连仅适合自用阶段；公开上架前需要迁移到后端代理。"
+            description="分析任务由后端拥有，前端只保存后端地址和 Base token。"
           />
-          <Field label="API Base URL">
+          <Field label="Backend Endpoint">
             <Input
-              name="hotel-review-ai-api-base-url"
+              name="hotel-review-ai-backend-endpoint-url"
               autoComplete="off"
               spellCheck={false}
-              value={props.config.ai.apiBaseUrl}
-              onChange={(value) => updateAi({ apiBaseUrl: value })}
+              value={props.config.backend.endpointUrl}
+              onChange={(value) => update({ backend: { ...props.config.backend, endpointUrl: value } })}
             />
           </Field>
-          <Field label="API Key">
+          <Field label="Base Token">
             <Input
-              name="hotel-review-ai-api-key"
+              name="hotel-review-ai-base-token"
               autoComplete="new-password"
               mode="password"
               spellCheck={false}
-              value={props.config.ai.apiKey}
-              onChange={(value) => updateAi({ apiKey: value })}
+              value={props.config.backend.baseToken}
+              onChange={(value) => update({ backend: { ...props.config.backend, baseToken: value } })}
             />
           </Field>
           <Field label="Model">
-            <Input
-              name="hotel-review-ai-model"
-              autoComplete="off"
-              spellCheck={false}
-              value={props.config.ai.model}
-              onChange={(value) => updateAi({ model: value })}
-            />
-          </Field>
-          <div className="config-inline">
-            <Field label="Temperature">
-              <InputNumber
-                value={props.config.ai.temperature}
-                min={0}
-                max={2}
-                step={0.1}
-                onChange={(value) => updateAi({ temperature: typeof value === 'number' ? value : 0.2 })}
-              />
-            </Field>
-            <Field label="Top N">
-              <InputNumber
-                value={props.config.ai.topN}
-                min={3}
-                max={20}
-                onChange={(value) => updateAi({ topN: typeof value === 'number' ? value : 10 })}
-              />
-            </Field>
-          </div>
-          <Field label="批次大小">
-            <InputNumber
-              value={props.config.ai.maxBatchSize}
-              min={10}
-              max={100}
-              onChange={(value) => updateAi({ maxBatchSize: typeof value === 'number' ? value : 10 })}
-            />
-          </Field>
-          <Field label="并发数">
-            <InputNumber
-              value={props.config.ai.batchConcurrency ?? 3}
-              min={1}
-              max={100}
-              onChange={(value) => updateAi({ batchConcurrency: typeof value === 'number' ? value : 3 })}
-            />
-          </Field>
-          <Field label="请求超时秒数">
-            <InputNumber
-              value={props.config.ai.requestTimeoutSeconds ?? 600}
-              min={30}
-              max={1200}
-              onChange={(value) => updateAi({ requestTimeoutSeconds: typeof value === 'number' ? value : 600 })}
-            />
+            <Input name="hotel-review-ai-model" autoComplete="off" spellCheck={false} value={props.config.ai.model} onChange={(value) => updateAi({ model: value })} />
           </Field>
         </section>
 
-        <section className="config-section">
-          <div className="config-section-head">
-            <h3>缓存预热</h3>
-          </div>
-          <Banner
-            type="info"
-            closeIcon={null}
-            description="定时预热由飞书工作流或外部调度调用后端接口；插件按钮只触发后端任务。"
-          />
-          <Field label="Warmup Endpoint URL">
-            <Input
-              name="hotel-review-ai-warmup-endpoint-url"
-              autoComplete="off"
-              spellCheck={false}
-              value={props.config.warmup.endpointUrl}
-              onChange={(value) => updateWarmup({ endpointUrl: value })}
-            />
-          </Field>
-          <Field label="Warmup Secret">
-            <Input
-              name="hotel-review-ai-warmup-secret"
-              autoComplete="new-password"
-              mode="password"
-              spellCheck={false}
-              value={props.config.warmup.secret}
-              onChange={(value) => updateWarmup({ secret: value })}
-            />
-          </Field>
-          <div className="warmup-actions">
-            <Button
-              disabled={props.disabled || props.warmupRunning || !props.config.source.tableId.trim()}
-              loading={props.warmupRunning}
-              onClick={props.onWarmupBootstrap}
-            >
-              初始化缓存
-            </Button>
-            <Button
-              theme="solid"
-              disabled={props.disabled || props.warmupRunning || !props.config.source.tableId.trim()}
-              loading={props.warmupRunning}
-              onClick={props.onWarmupIncremental}
-            >
-              立即预热
-            </Button>
-          </div>
-        </section>
-
-        <section className="config-section">
-          <div className="config-section-head">
-            <h3>写回设置</h3>
-          </div>
-          <div className="config-switch">
-            <span>写回 Base 聚合结果</span>
-            <Switch
-              checked={props.config.writeback.enabled}
-              onChange={(checked) =>
-                update({
-                  writeback: {
-                    ...props.config.writeback,
-                    enabled: Boolean(checked),
-                    confirmed: Boolean(checked) ? props.config.writeback.confirmed : false,
-                  },
-                })
-              }
-            />
-          </div>
-          {props.config.writeback.enabled && !props.config.writeback.confirmed ? (
-            <div className="writeback-confirm">
-              <span>首次写回会创建「AI分析批次」和「AI主题汇总」两张表。</span>
-              <Button
-                size="small"
-                onClick={() => update({ writeback: { ...props.config.writeback, confirmed: true } })}
-              >
-                确认创建
-              </Button>
-            </div>
-          ) : null}
-        </section>
       </div>
       <div className="config-actions">
-        <Button disabled={props.disabled} loading={props.testingConnection} onClick={props.onTestConnection}>
-          测试连接
-        </Button>
         <Button theme="solid" disabled={props.disabled} loading={props.saving} onClick={props.onSave}>
           保存配置
         </Button>

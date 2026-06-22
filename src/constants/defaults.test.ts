@@ -33,4 +33,8 @@ describe('DEFAULT_CONFIG', () => {
       '其他',
     ]);
   });
+
+  it('keeps backend endpoint empty by default when no build-time env is injected', () => {
+    expect(DEFAULT_CONFIG.backend.endpointUrl).toBe('');
+  });
 });

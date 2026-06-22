@@ -66,6 +66,8 @@ export type DashboardRuntime = {
   addRecords(tableId: string, records: Array<{ fields: Record<string, unknown> }>): Promise<string[]>;
   setRecords(tableId: string, records: Array<{ recordId: string; fields: Record<string, unknown> }>): Promise<unknown[]>;
   setRendered(): Promise<boolean>;
+  getTenantKey(): Promise<string>;
+  getBaseUserId(): Promise<string>;
   getInstanceId(): Promise<string>;
 };
 
@@ -151,6 +153,8 @@ export function createFixtureRuntime(
     addRecords: async (_tableId, records) => records.map((_, index) => `fixture-write-${index}`),
     setRecords: async (_tableId, records) => records.map((record) => ({ recordId: record.recordId })),
     setRendered: async () => true,
+    getTenantKey: async () => 'fixture-tenant',
+    getBaseUserId: async () => 'fixture-user',
     getInstanceId: async () => 'fixture-instance',
   };
 }
@@ -340,6 +344,8 @@ export function createLarkRuntime(): DashboardRuntime {
       return table.setRecords(records as never);
     },
     setRendered: () => dashboard.setRendered(),
+    getTenantKey: () => bitable.bridge.getTenantKey(),
+    getBaseUserId: () => bitable.bridge.getBaseUserId(),
     getInstanceId: () => bridge.getInstanceId(),
   };
 }

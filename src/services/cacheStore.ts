@@ -66,7 +66,11 @@ function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
   };
   const warmup = {
     ...DEFAULT_CONFIG.warmup,
-    ...config.warmup,
+  };
+  const backend = {
+    ...DEFAULT_CONFIG.backend,
+    ...config.backend,
+    endpointUrl: normalizeBackendEndpointUrl(config.backend?.endpointUrl),
   };
   const writeback = {
     ...DEFAULT_CONFIG.writeback,
@@ -74,7 +78,6 @@ function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
   };
   const isOldEmptyEndpoint = !ai.apiBaseUrl.trim();
   const isOldDefaultModel = ai.model === 'gpt-4o-mini' || !ai.model.trim();
-  const isEmptyApiKey = !ai.apiKey.trim();
 
   return {
     ...DEFAULT_CONFIG,
@@ -84,10 +87,16 @@ function normalizePluginConfig(config: Partial<PluginConfig>): PluginConfig {
     ai: {
       ...ai,
       apiBaseUrl: isOldEmptyEndpoint ? DEFAULT_CONFIG.ai.apiBaseUrl : ai.apiBaseUrl,
-      apiKey: isEmptyApiKey ? '' : ai.apiKey,
+      apiKey: '',
       model: isOldDefaultModel ? DEFAULT_CONFIG.ai.model : ai.model,
     },
+    backend,
     warmup,
     writeback,
   };
+}
+
+function normalizeBackendEndpointUrl(value: string | undefined): string {
+  const trimmed = value?.trim() ?? '';
+  return trimmed || DEFAULT_CONFIG.backend.endpointUrl;
 }

@@ -12,7 +12,7 @@ describe('cacheStore', () => {
     expect(await loadPluginConfig(runtime)).toEqual(DEFAULT_CONFIG);
   });
 
-  it('fills new default AI endpoint and model into old empty saved configs', async () => {
+  it('fills new default AI endpoint and model while clearing old saved API keys', async () => {
     const runtime = fakeRuntime({
       dataConditions: [],
       customConfig: {
@@ -29,7 +29,7 @@ describe('cacheStore', () => {
     const config = await loadPluginConfig(runtime);
 
     expect(config.ai.apiBaseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
-    expect(config.ai.apiKey).toBe('sk-existing');
+    expect(config.ai.apiKey).toBe('');
     expect(config.ai.model).toBe('qwen-plus');
   });
 
@@ -111,6 +111,83 @@ describe('cacheStore', () => {
     const configAfterSave = savedConfig as unknown as RuntimeConfig;
     expect(configAfterSave.customConfig?.ai.model).toBe('custom-model');
     expect(configAfterSave.customConfig?.analysisCache).toEqual(cache);
+  });
+
+  it('does not save legacy AI API keys back into Dashboard customConfig when updating analysis cache', async () => {
+    let savedConfig: RuntimeConfig | null = null;
+    const runtime = fakeRuntime(
+      {
+        dataConditions: [],
+        customConfig: {
+          ...DEFAULT_CONFIG,
+          ai: {
+            ...DEFAULT_CONFIG.ai,
+            apiKey: 'sk-legacy',
+          },
+        },
+      },
+      (config: RuntimeConfig) => {
+        savedConfig = config;
+        return Promise.resolve(true);
+      },
+    );
+    const cache: AnalysisCache = {
+      result: { ...FIXTURE_ANALYSIS_RESULT, analysisId: 'analysis-without-key' },
+      scopeSnapshot: {},
+      sourceSnapshot: {},
+      model: DEFAULT_CONFIG.ai.model,
+      generatedAt: '2026-06-18T12:00:00+08:00',
+    };
+
+    await saveAnalysisCache(runtime, cache);
+
+    expect((savedConfig as unknown as RuntimeConfig).customConfig?.ai.apiKey).toBe('');
+    expect((savedConfig as unknown as RuntimeConfig).customConfig?.analysisCache).toEqual(cache);
+  });
+
+  it('does not preserve legacy warmup endpoint or secret in Dashboard customConfig', async () => {
+    let savedConfig: RuntimeConfig | null = null;
+    const runtime = fakeRuntime(
+      {
+        dataConditions: [],
+        customConfig: {
+          ...DEFAULT_CONFIG,
+          warmup: {
+            endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
+            secret: 'legacy-warmup-secret',
+          },
+        },
+      },
+      (config: RuntimeConfig) => {
+        savedConfig = config;
+        return Promise.resolve(true);
+      },
+    );
+    const pluginConfig = await loadPluginConfig(runtime);
+
+    expect(pluginConfig.warmup).toEqual(DEFAULT_CONFIG.warmup);
+
+    await savePluginConfig(runtime, pluginConfig);
+
+    expect((savedConfig as unknown as RuntimeConfig).customConfig?.warmup).toEqual(DEFAULT_CONFIG.warmup);
+  });
+
+  it('fills backend endpoint from the new default when an old saved config leaves it blank', async () => {
+    const runtime = fakeRuntime({
+      dataConditions: [],
+      customConfig: {
+        ...DEFAULT_CONFIG,
+        backend: {
+          ...DEFAULT_CONFIG.backend,
+          endpointUrl: '',
+          baseToken: 'base-token',
+        },
+      },
+    });
+
+    const config = await loadPluginConfig(runtime);
+
+    expect(config.backend.endpointUrl).toBe(DEFAULT_CONFIG.backend.endpointUrl);
   });
 
   it('saves plugin config with dashboard data conditions', async () => {
@@ -252,6 +329,8 @@ function fakeRuntime(
     addRecords: vi.fn(),
     setRecords: vi.fn(),
     setRendered: vi.fn(),
+    getTenantKey: vi.fn(async () => 'fixture-tenant'),
+    getBaseUserId: vi.fn(async () => 'fixture-user'),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
   };
 }

@@ -1,5 +1,7 @@
 import type { FieldMapping, PluginConfig } from '../types/config';
 
+declare const __HOTEL_REVIEW_AI_BACKEND_ENDPOINT_URL__: string | undefined;
+
 export const REQUIRED_FIELD_KEYS = [
   'reviewId',
   'content',
@@ -71,6 +73,10 @@ export const DEFAULT_CONFIG: PluginConfig = {
     batchConcurrency: 3,
     requestTimeoutSeconds: 600,
     topN: 10,
+  },
+  backend: {
+    endpointUrl: (typeof __HOTEL_REVIEW_AI_BACKEND_ENDPOINT_URL__ === 'string' ? __HOTEL_REVIEW_AI_BACKEND_ENDPOINT_URL__ : '') || '',
+    baseToken: '',
   },
   warmup: {
     endpointUrl: '',

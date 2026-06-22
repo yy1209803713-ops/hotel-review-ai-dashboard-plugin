@@ -1,4 +1,4 @@
-import type { WarmupMode, WarmupRequest, WarmupResponse, WarmupSource, WarmupStage } from '../src/services/warmup';
+import type { WarmupMode, WarmupRequest, WarmupResponse, WarmupSource, WarmupStage } from './warmupTypes';
 
 export type WarmupHandlerOptions = {
   warmupSecret: string;

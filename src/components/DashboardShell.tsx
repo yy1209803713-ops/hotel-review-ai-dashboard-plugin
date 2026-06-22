@@ -21,6 +21,8 @@ export function DashboardShell(props: {
   evidenceLoading: boolean;
   loading: boolean;
   analysisRunning: boolean;
+  exportDisabled?: boolean;
+  exporting?: boolean;
   error: string | null;
   scopeWarning: string | null;
   stale: boolean;
@@ -28,6 +30,7 @@ export function DashboardShell(props: {
   onFilterChange: (filters: FilterState) => void;
   onPeriodChange: (periodType: PeriodType) => void;
   onUpdate: () => void;
+  onExportBaseSummary?: () => void;
   onSelectTopic: (topic: TopicSummary) => void;
   onEvidencePageChange: (page: number) => void;
   onCloseTopic: () => void;
@@ -41,7 +44,7 @@ export function DashboardShell(props: {
               <h1>酒店评论 AI 分析</h1>
               <span className="version-badge">V1.2</span>
             </div>
-            <p>按酒店和周期做整体聚合分析，更新按钮只刷新缓存，不在每次打开时消耗 AI token。</p>
+            <p>按酒店和周期汇总评论主题、风险信号和经营改进建议。</p>
           </div>
         </header>
         <FilterBar
@@ -49,10 +52,13 @@ export function DashboardShell(props: {
           hotelOptions={props.hotelOptions}
           checkInMonthOptions={props.checkInMonthOptions}
           loading={props.analysisRunning}
+          exportDisabled={props.exportDisabled}
+          exporting={props.exporting}
           lastGeneratedAt={props.analysis?.generatedAt}
           onChange={props.onFilterChange}
           onPeriodChange={props.onPeriodChange}
           onUpdate={props.onUpdate}
+          onExportBaseSummary={props.onExportBaseSummary}
         />
         <div className="content">
           {props.error ? <ErrorBanner message={props.error} /> : null}

@@ -187,6 +187,235 @@ describe('createLarkOpenApiRuntime', () => {
       },
     ]);
   });
+
+  it('throws a clear Error when paged Feishu responses omit items', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.getTableList()).rejects.toThrow('items missing from Feishu OpenAPI paged response');
+  });
+
+  it('throws a clear Error when record write responses omit records', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [{ field_id: 'fld-model', field_name: '模型', type: 1 }],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_create')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {},
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_update')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {},
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.addRecords('tbl-cache', [{ fields: { 'fld-model': 'qwen-plus' } }])).rejects.toThrow(
+      'records missing after creating records in tbl-cache',
+    );
+    await expect(runtime.setRecords('tbl-cache', [{ recordId: 'rec-cache-1', fields: { 'fld-model': 'qwen-plus' } }])).rejects.toThrow(
+      'records missing after updating records in tbl-cache',
+    );
+  });
+
+  it('retries tenant auth after a temporary auth failure', async () => {
+    let authCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        authCalls += 1;
+        if (authCalls === 1) {
+          return new Response('temporarily unavailable', { status: 500, headers: { 'Content-Type': 'text/plain' } });
+        }
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [{ table_id: 'tbl-review', name: '酒店评论' }],
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.getTableList()).rejects.toThrow('Feishu OpenAPI HTTP 500');
+    await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
+    expect(authCalls).toBe(2);
+  });
+
+  it('refreshes tenant auth after the cached token expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-18T00:00:00.000Z'));
+
+    let authCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        authCalls += 1;
+        return jsonResponse({
+          code: 0,
+          msg: 'ok',
+          tenant_access_token: authCalls === 1 ? 'tenant-token-a' : 'tenant-token-b',
+          expire: authCalls === 1 ? 1 : 7200,
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        expect(init?.headers).toMatchObject({
+          Authorization: authCalls === 1 ? 'Bearer tenant-token-a' : 'Bearer tenant-token-b',
+        });
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [{ table_id: 'tbl-review', name: '酒店评论' }],
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
+    expect(authCalls).toBe(2);
+
+    vi.useRealTimers();
+  });
+
+  it('reads records keyed by field id without failing field mapping', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [{ table_id: 'tbl-review', name: '酒店评论' }],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/fields?')) {
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [
+              { field_id: 'fld-review-id', field_name: '评论ID', type: 1 },
+              { field_id: 'fld-content', field_name: '评论内容', type: 1 },
+            ],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/records?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer tenant-token' });
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: [
+              {
+                record_id: 'rec1',
+                fields: {
+                  'fld-review-id': 'R001',
+                  'fld-content': '位置很好',
+                },
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      appId: 'cli-a',
+      appSecret: 'secret-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.readRecordsPage('tbl-review', { pageSize: 50 })).resolves.toEqual({
+      records: [
+        {
+          recordId: 'rec1',
+          fields: {
+            'fld-review-id': 'R001',
+            'fld-content': '位置很好',
+            评论ID: 'R001',
+            评论内容: '位置很好',
+          },
+        },
+      ],
+      hasMore: false,
+      pageToken: undefined,
+    });
+  });
 });
 
 function jsonResponse(body: unknown): Response {

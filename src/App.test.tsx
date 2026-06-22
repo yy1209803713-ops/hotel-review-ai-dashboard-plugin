@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
 import type { RecordsPage } from './services/baseRecords';
-import type { ReviewRecord } from './types/analysis';
 import type { PluginConfig } from './types/config';
 
 const runtimeRef = vi.hoisted(() => ({
@@ -15,8 +14,18 @@ const analysisPipelineMock = vi.hoisted(() => ({
   runAnalysis: vi.fn(),
 }));
 
-const warmupClientMock = vi.hoisted(() => ({
-  triggerWarmup: vi.fn(),
+const backendAnalysisClientMock = vi.hoisted(() => ({
+  createBackendAnalysisClient: vi.fn(),
+  client: {
+    upsertConfig: vi.fn(),
+    resolveScope: vi.fn(),
+    getCurrentJob: vi.fn(),
+    createAnalysisJob: vi.fn(),
+    getJob: vi.fn(),
+    getLatestResult: vi.fn(),
+    getTopicEvidence: vi.fn(),
+    exportBaseSummary: vi.fn(),
+  },
 }));
 
 vi.mock('./runtime/sdk', () => ({
@@ -32,9 +41,13 @@ vi.mock('./services/analysisPipeline', () => ({
   runAnalysis: analysisPipelineMock.runAnalysis,
 }));
 
-vi.mock('./services/warmupClient', () => ({
-  triggerWarmup: warmupClientMock.triggerWarmup,
-}));
+vi.mock('./services/backendAnalysisClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./services/backendAnalysisClient')>();
+  return {
+    ...actual,
+    createBackendAnalysisClient: backendAnalysisClientMock.createBackendAnalysisClient,
+  };
+});
 
 vi.mock('@douyinfe/semi-ui', () => ({
   Banner: (props: { description?: React.ReactNode }) => <div role="alert">{props.description}</div>,
@@ -119,20 +132,49 @@ describe('App initialization', () => {
     vi.clearAllMocks();
     runtimeRef.current = undefined;
     analysisPipelineMock.runAnalysis.mockResolvedValue(createAnalysisResult(0));
-    warmupClientMock.triggerWarmup.mockResolvedValue({
-      jobId: 'warmup-1',
-      status: 'success',
-      mode: 'incremental',
-      summary: {
-        totalReviews: 2,
-        evidenceCacheHits: 1,
-        evidenceCacheMisses: 1,
-        evidenceRecordsSaved: 1,
-        topicMappingHits: 2,
-        topicMappingMisses: 1,
-        topicMappingsSaved: 1,
+    backendAnalysisClientMock.createBackendAnalysisClient.mockReturnValue(backendAnalysisClientMock.client);
+    backendAnalysisClientMock.client.upsertConfig.mockResolvedValue({ configId: 'config-1', configVersion: 1 });
+    backendAnalysisClientMock.client.resolveScope.mockResolvedValue({
+      scopeKey: 'scope-initial',
+      configVersion: 1,
+      sourceVersion: {
+        kind: 'feishu_base',
+        sourceId: 'tbl1',
+        version: 'v1',
+        generatedAt: '2026-06-18T00:00:00.000Z',
+        recordCount: 1,
+        contentHash: 'hash-1',
       },
-      errors: [],
+    });
+    backendAnalysisClientMock.client.getCurrentJob.mockResolvedValue(null);
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValue({
+      jobId: 'job-1',
+      scopeKey: 'scope-create',
+      status: 'queued',
+    });
+    backendAnalysisClientMock.client.getJob.mockResolvedValue({
+      jobId: 'job-1',
+      scopeKey: 'scope-actual',
+      status: 'success',
+      resultId: 'result-1',
+    });
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValue({
+      resultId: 'result-1',
+      summary: createAnalysisResult(1),
+    });
+    backendAnalysisClientMock.client.getTopicEvidence.mockResolvedValue({
+      evidence: [],
+      page: 1,
+      pageSize: 20,
+      total: 0,
+    });
+    backendAnalysisClientMock.client.exportBaseSummary.mockResolvedValue({
+      resultId: 'result-1',
+      summaryTableId: 'tbl-summary',
+      topicTableId: 'tbl-topic',
+      summaryRecordIds: ['rec-summary'],
+      topicRecordIds: ['rec-topic'],
+      exportedAt: '2026-06-18T12:00:00.000Z',
     });
   });
 
@@ -272,7 +314,7 @@ describe('App initialization', () => {
     await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存配置'));
 
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
     expect(runtime.saveConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         dataConditions: [
@@ -325,7 +367,7 @@ describe('App initialization', () => {
     await waitFor(() => expect(screen.getByDisplayValue('全部数据')).toBeInTheDocument());
     fireEvent.click(screen.getByText('保存配置'));
 
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
     expect(runtime.saveConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         dataConditions: [expect.objectContaining({ dataRange: { type: SourceType.ALL } })],
@@ -422,7 +464,7 @@ describe('App initialization', () => {
     );
   });
 
-  it('triggers incremental cache warmup from Config panel controls', async () => {
+  it('does not expose browser warmup controls from the Config panel', async () => {
     const savedConfig = withSource({
       tableId: 'tbl1',
       fields: optionFieldMapping('a'),
@@ -449,23 +491,12 @@ describe('App initialization', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText('立即预热')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('立即预热'));
-
-    await waitFor(() => expect(warmupClientMock.triggerWarmup).toHaveBeenCalledTimes(1));
-    expect(warmupClientMock.triggerWarmup).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source: expect.objectContaining({ tableId: 'tbl1' }),
-        warmup: {
-          endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
-          secret: 'warmup-secret',
-        },
-      }),
-      'incremental',
-      'dashboard-button',
-    );
-    expect(await screen.findByText('缓存预热状态')).toBeInTheDocument();
-    expect(Toast.success).toHaveBeenCalledWith('缓存预热完成：新增证据 1 条，新增主题映射 1 条');
+    await waitFor(() => expect(screen.getByText('插件配置')).toBeInTheDocument());
+    expect(screen.queryByText('缓存预热')).not.toBeInTheDocument();
+    expect(screen.queryByText('初始化缓存')).not.toBeInTheDocument();
+    expect(screen.queryByText('立即预热')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('hotel-review-ai-warmup-endpoint-url')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('hotel-review-ai-warmup-secret')).not.toBeInTheDocument();
   });
 
   it('persists dashboard filter selections when they change', async () => {
@@ -498,7 +529,7 @@ describe('App initialization', () => {
     await waitFor(() => expect(screen.getByText('表 B 酒店')).toBeInTheDocument());
     fireEvent.change(screen.getByDisplayValue('全部酒店'), { target: { value: '表 B 酒店' } });
 
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
     expect(runtime.saveConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({
         customConfig: expect.objectContaining({
@@ -565,6 +596,9 @@ describe('App initialization', () => {
     render(<App />);
 
     await screen.findByPlaceholderText('开始日期');
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
+    vi.mocked(runtime.saveConfig).mockClear();
+
     fireEvent.click(screen.getByText('本周'));
 
     await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
@@ -652,6 +686,9 @@ describe('App initialization', () => {
     render(<App />);
 
     await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
+    vi.mocked(runtime.saveConfig).mockClear();
+
     fireEvent.click(screen.getByText('本周'));
     await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
     act(() => {
@@ -660,7 +697,6 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(runtime.getConfig).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).not.toBeInTheDocument();
-    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
     expect(screen.getByText('更新分析')).not.toHaveAttribute('loading');
 
     await act(async () => {
@@ -670,46 +706,21 @@ describe('App initialization', () => {
   });
 
   it('renders last analysis time in Beijing local time', async () => {
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-beijing',
+      summary: {
+        ...createAnalysisResult(1),
+        generatedAt: '2026-06-17T00:00:00.000Z',
+      },
+    });
     const runtime = fakeRuntime({
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
         dataConditions: [],
-        customConfig: {
-          ...withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-          ai: {
-            ...DEFAULT_CONFIG.ai,
-            apiKey: 'sk-test',
-          },
-          analysisCache: {
-            result: {
-              ...createAnalysisResult(1),
-              generatedAt: '2026-06-17T00:00:00.000Z',
-            },
-            scopeSnapshot: {
-              filters: DEFAULT_CONFIG.filters,
-              fields: optionFieldMapping('a'),
-              model: DEFAULT_CONFIG.ai.model,
-              analysisCopyVersion: 'v1.2-conversational-copy',
-              totalReviews: 1,
-              firstRecordId: 'rec-review-a',
-              lastRecordId: 'rec-review-a',
-              source: {
-                tableId: 'tbl1',
-                dataRange: undefined,
-                hostDataSignal: 'host-visible-review-ids:review-a',
-              },
-            },
-            sourceSnapshot: withSource({
-              tableId: 'tbl1',
-              fields: optionFieldMapping('a'),
-            }).source,
-            model: DEFAULT_CONFIG.ai.model,
-            generatedAt: '2026-06-17T00:00:00.000Z',
-          },
-        },
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
       })),
       getData: vi.fn(async () => [
         [{ value: '评论ID', text: '评论ID', groupKey: null }],
@@ -727,39 +738,6 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
     expect(screen.getByText('上次分析：2026-06-17 08:00')).toBeInTheDocument();
-  });
-
-  it('shows backend stage and message when cache warmup fails', async () => {
-    warmupClientMock.triggerWarmup.mockRejectedValueOnce(Object.assign(new Error('permission denied'), {
-      stage: 'read_reviews',
-    }));
-    const runtime = fakeRuntime({
-      getState: () => 'Config',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: {
-          ...withSource({ tableId: 'tbl1', fields: optionFieldMapping('a') }),
-          warmup: {
-            endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
-            secret: 'warmup-secret',
-          },
-        },
-      })),
-      getCategories: vi.fn(async () => optionCategories('a')),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
-    });
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(screen.getByText('初始化缓存')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('初始化缓存'));
-
-    expect(await screen.findByText('缓存预热失败：read_reviews permission denied')).toBeInTheDocument();
-    expect(Toast.error).toHaveBeenCalledWith('缓存预热失败：read_reviews permission denied');
   });
 
   it('keeps the latest same-table preview when data range switches resolve out of order', async () => {
@@ -1129,7 +1107,7 @@ describe('App initialization', () => {
     expect(runtime.saveConfig).not.toHaveBeenCalled();
   });
 
-  it('blocks saving when API Base URL or model is blank but allows an empty API key', async () => {
+  it('blocks saving when backend endpoint, Base Token, or model is blank', async () => {
     const runtime = fakeRuntime({
       getConfig: vi.fn(async () => ({
         dataConditions: [],
@@ -1147,20 +1125,349 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('tbl1'));
     fireEvent.click(screen.getByText('保存配置'));
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(2));
 
-    fireEvent.change(screen.getByLabelText('hotel-review-ai-api-base-url'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-backend-endpoint-url'), { target: { value: '' } });
     fireEvent.click(screen.getByText('保存配置'));
-    await waitFor(() => expect(screen.getAllByText('请先填写 API Base URL').length).toBeGreaterThan(0));
-    expect(runtime.saveConfig).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getAllByText('请先填写后端分析服务地址').length).toBeGreaterThan(0));
+    expect(runtime.saveConfig).toHaveBeenCalledTimes(2);
 
-    fireEvent.change(screen.getByLabelText('hotel-review-ai-api-base-url'), {
-      target: { value: DEFAULT_CONFIG.ai.apiBaseUrl },
-    });
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-backend-endpoint-url'), { target: { value: 'https://backend.example.com' } });
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-base-token'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('保存配置'));
+    await waitFor(() => expect(screen.getAllByText('请先填写 Base Token').length).toBeGreaterThan(0));
+    expect(runtime.saveConfig).toHaveBeenCalledTimes(2);
+
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-base-token'), { target: { value: 'base-token' } });
     fireEvent.change(screen.getByLabelText('hotel-review-ai-model'), { target: { value: '' } });
     fireEvent.click(screen.getByText('保存配置'));
     await waitFor(() => expect(screen.getAllByText('请先填写 Model').length).toBeGreaterThan(0));
-    expect(runtime.saveConfig).toHaveBeenCalledTimes(1);
+    expect(runtime.saveConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts backend-owned analysis without requiring API Key or running the browser pipeline', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.upsertConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantKey: 'fixture-tenant',
+        baseUserId: 'fixture-user',
+        pluginInstanceId: 'fixture-instance',
+        baseToken: 'base-token',
+        source: expect.objectContaining({
+          kind: 'feishu_base',
+          tableId: 'tbl1',
+        }),
+      }),
+    );
+    expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      configId: 'config-1',
+      forceRefresh: true,
+    });
+    expect(analysisPipelineMock.runAnalysis).not.toHaveBeenCalled();
+    expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1);
+    expect(Toast.error).not.toHaveBeenCalledWith('请先填写并保存 API Key');
+  });
+
+  it('does not rewrite Dashboard config during View restore when backend config metadata is unchanged', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.resolveScope).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('exports the current backend result summary through the backend Base export API', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('导出摘要')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('导出摘要'));
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.exportBaseSummary).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.exportBaseSummary).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      resultId: 'result-1',
+      scopeKey: 'scope-initial',
+    });
+    expect(Toast.success).toHaveBeenCalledWith('摘要已导出到 Base：tbl-summary / tbl-topic');
+    expect(runtime.addTable).not.toHaveBeenCalled();
+    expect(runtime.addRecords).not.toHaveBeenCalled();
+  });
+
+  it('surfaces backend export errors with stage and message', async () => {
+    backendAnalysisClientMock.client.exportBaseSummary.mockRejectedValueOnce({
+      stage: 'export_summary',
+      message: 'LARK_APP_ID is required for base summary export',
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('导出摘要')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('导出摘要'));
+
+    await waitFor(() => expect(screen.getByText('export_summary LARK_APP_ID is required for base summary export')).toBeInTheDocument());
+    expect(Toast.error).toHaveBeenCalledWith('导出摘要失败：export_summary LARK_APP_ID is required for base summary export');
+  });
+
+  it('uses ownership query for job polling and latest result after backend updates scopeKey', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValueOnce({
+      jobId: 'job-1',
+      scopeKey: 'scope-preflight',
+      status: 'running',
+    });
+    backendAnalysisClientMock.client.getJob.mockResolvedValueOnce({
+      jobId: 'job-1',
+      scopeKey: 'scope-actual',
+      status: 'success',
+      resultId: 'result-1',
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.getJob).toHaveBeenCalledWith('job-1', {
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+    });
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      scopeKey: 'scope-actual',
+    });
+  });
+
+  it('surfaces failed restored jobs without loading stale latest result', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getCurrentJob.mockResolvedValueOnce({
+      jobId: 'job-restored',
+      scopeKey: 'scope-running',
+      status: 'running',
+      stage: 'read_reviews',
+    });
+    backendAnalysisClientMock.client.getJob.mockResolvedValueOnce({
+      jobId: 'job-restored',
+      scopeKey: 'scope-running',
+      status: 'failed',
+      stage: 'read_reviews',
+      errorStage: 'read_reviews',
+      errorMessage: 'Base read denied',
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('read_reviews Base read denied')).toBeInTheDocument());
+    expect(backendAnalysisClientMock.client.getLatestResult).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['failed', 'read_reviews', 'Base read denied', 'read_reviews Base read denied'],
+    ['canceled', 'validate_request', 'analysis job canceled', 'validate_request analysis job canceled'],
+  ] as const)('surfaces terminal %s current jobs without polling or loading stale latest result', async (
+    status,
+    errorStage,
+    errorMessage,
+    renderedMessage,
+  ) => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getCurrentJob.mockResolvedValueOnce({
+      jobId: `job-terminal-${status}`,
+      scopeKey: 'scope-initial',
+      status,
+      stage: errorStage,
+      errorStage,
+      errorMessage,
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(renderedMessage)).toBeInTheDocument());
+    expect(backendAnalysisClientMock.client.getJob).not.toHaveBeenCalled();
+    expect(backendAnalysisClientMock.client.getLatestResult).not.toHaveBeenCalled();
   });
 
   it('shows the real Dashboard save error when saving fails', async () => {
@@ -1189,7 +1496,8 @@ describe('App initialization', () => {
     expect(Toast.error).toHaveBeenCalledWith('host save exploded');
   });
 
-  it('blocks connection test and analysis when API key is blank', async () => {
+  it('surfaces filter option record read errors after saving config', async () => {
+    let readCalls = 0;
     const runtime = fakeRuntime({
       getConfig: vi.fn(async () => ({
         dataConditions: [],
@@ -1199,25 +1507,28 @@ describe('App initialization', () => {
         }),
       })),
       getCategories: vi.fn(async () => optionCategories('a')),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
+      readRecordsPage: vi.fn(async () => {
+        readCalls += 1;
+        if (readCalls > 1) {
+          throw new Error('筛选选项读取失败');
+        }
+        return {
+          records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
+          hasMore: false,
+        };
+      }),
     });
 
     runtimeRef.current = runtime;
 
     render(<App />);
 
-    await waitFor(() => expect(runtime.getCategories).toHaveBeenCalledWith('tbl1'));
-    vi.mocked(runtime.readRecordsPage).mockClear();
+    await waitFor(() => expect(screen.getByText('表 A 酒店')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('保存配置'));
 
-    fireEvent.click(screen.getByText('测试连接'));
-    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith('请先填写并保存 API Key'));
-
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-    await waitFor(() => expect(screen.getAllByText('请先填写并保存 API Key').length).toBeGreaterThan(0));
-    expect(runtime.readRecordsPage).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText('筛选选项读取失败')).toBeInTheDocument());
+    expect(Toast.error).toHaveBeenCalledWith('筛选选项读取失败');
+    expect(Toast.success).not.toHaveBeenCalledWith('配置已保存');
   });
 
   it('blocks analysis when required field mapping is missing', async () => {
@@ -1239,621 +1550,6 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getAllByText(/请先完成字段映射/).length).toBeGreaterThan(0));
     expect(runtime.readRecordsPage).not.toHaveBeenCalled();
-  });
-
-  it('blocks analysis when host data cannot be mapped to review IDs', async () => {
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [[{ value: '记录数', text: '记录数', groupKey: null }]]),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecord('a', '表 A 酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
-    });
-
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    vi.mocked(runtime.readRecordsPage).mockClear();
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-
-    await waitFor(() =>
-      expect(
-        screen.getByText('当前仪表盘筛选结果无法映射到评论 ID，已停止 AI 分析以避免分析到非当前范围的数据。请检查字段映射和数据源配置。'),
-      ).toBeInTheDocument(),
-    );
-    expect(runtime.readRecordsPage).not.toHaveBeenCalled();
-    expect(analysisPipelineMock.runAnalysis).not.toHaveBeenCalled();
-  });
-
-  it('limits analysis to host-visible review IDs before running AI', async () => {
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-      ]),
-      readRecordsPage: vi.fn(async () => ({
-        records: [
-          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
-          optionRecordWithReviewId('a', 'review-hidden', '表 A 隐藏酒店', '2026-06-01 00:00:00'),
-        ],
-        hasMore: false,
-      })),
-    });
-
-    analysisPipelineMock.runAnalysis.mockResolvedValueOnce(createAnalysisResult(1));
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    vi.mocked(runtime.readRecordsPage).mockClear();
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-
-    await waitFor(() => expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledTimes(1));
-    expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1);
-    expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledWith(
-      expect.objectContaining({
-        records: [expect.objectContaining({ reviewId: 'review-a' })],
-      }),
-    );
-    const [{ records }] = analysisPipelineMock.runAnalysis.mock.calls[0] as Array<{ records: ReviewRecord[] }>;
-    expect(records.map((record) => record.reviewId)).toEqual(['review-a']);
-  });
-
-  it('uses cached first-stage evidence and sends only cache misses to AI analysis', async () => {
-    const sourceRecords = [
-      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
-      optionRecordWithReviewId('a', 'review-b', '表 A 酒店', '2026-06-02 00:00:00'),
-    ];
-    const cachedContent = String(sourceRecords[0].fields.fld_a_content);
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
-      ]),
-      getTableList: vi.fn(async () => [
-        { tableId: 'tbl1', tableName: '酒店评论' },
-        { tableId: 'cache-table', tableName: 'AI评论证据缓存' },
-      ]),
-      getFieldMetaList: vi.fn(async (tableId: string) =>
-        tableId === 'cache-table'
-          ? evidenceCacheFieldNames.map((fieldName) => ({
-              fieldId: `cache-${fieldName}`,
-              fieldName,
-              fieldType: 'text',
-            }))
-          : [],
-      ),
-      readRecordsPage: vi.fn(async (tableId: string) => {
-        if (tableId === 'cache-table') {
-          return {
-            records: [
-              {
-                recordId: 'cache-row-a',
-                fields: {
-                  'cache-数据表 ID': 'tbl1',
-                  'cache-评论 recordId': 'rec-review-a',
-                  'cache-评论内容 hash': await hashFor(cachedContent),
-                  'cache-模型': DEFAULT_CONFIG.ai.model,
-                  'cache-抽取规则版本': 'evidence-v1.3-topic-quality',
-                  'cache-证据 JSON': JSON.stringify([
-                    {
-                      recordId: 'rec-review-a',
-                      quote: cachedContent,
-                      sentiment: 'positive',
-                      aspectLabel: '缓存证据',
-                    },
-                  ]),
-                },
-              },
-            ],
-            hasMore: false,
-          };
-        }
-        return {
-          records: sourceRecords,
-          hasMore: false,
-        };
-      }),
-    });
-
-    analysisPipelineMock.runAnalysis.mockResolvedValueOnce(createAnalysisResult(2));
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    vi.mocked(runtime.readRecordsPage).mockClear();
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-
-    await waitFor(() => expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledTimes(1));
-    expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cachedEvidenceItems: [
-          expect.objectContaining({
-            recordId: 'rec-review-a',
-            aspectLabel: '缓存证据',
-          }),
-        ],
-        cacheMissRecords: [expect.objectContaining({ recordId: 'rec-review-b' })],
-      }),
-    );
-  });
-
-  it('reads and saves topic mappings during analysis updates', async () => {
-    const sourceRecords = [
-      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
-      optionRecordWithReviewId('a', 'review-b', '表 A 酒店', '2026-06-02 00:00:00'),
-    ];
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
-      ]),
-      getTableList: vi.fn(async () => [
-        { tableId: 'tbl1', tableName: '酒店评论' },
-        { tableId: 'topic-cache', tableName: 'AI评论主题映射缓存' },
-      ]),
-      getFieldMetaList: vi.fn(async (tableId: string) =>
-        tableId === 'topic-cache'
-          ? topicMappingCacheFieldNames.map((fieldName) => ({
-              fieldId: `topic-${fieldName}`,
-              fieldName,
-              fieldType: 'text',
-            }))
-          : [],
-      ),
-      readRecordsPage: vi.fn(async (tableId: string) => {
-        if (tableId === 'topic-cache') {
-          return {
-            records: [
-              {
-                recordId: 'topic-row-1',
-                fields: {
-                  'topic-数据表 ID': 'tbl1',
-                  'topic-候选 sentiment': 'positive',
-                  'topic-候选标签归一化 key': '房间空间',
-                  'topic-候选标签': '房间空间',
-                  'topic-模型': DEFAULT_CONFIG.ai.model,
-                  'topic-主题映射规则版本': 'topic-mapping-v1.0',
-                  'topic-映射 JSON': JSON.stringify({
-                    sourceLabel: '房间空间',
-                    sentiment: 'positive',
-                    mergeKey: '房间空间采光',
-                    category: '房型',
-                    displayTopic: '房间宽敞，采光也好',
-                    summary: '客人认可房间空间和采光。',
-                  }),
-                },
-              },
-            ],
-            hasMore: false,
-          };
-        }
-        return {
-          records: sourceRecords,
-          hasMore: false,
-        };
-      }),
-    });
-
-    analysisPipelineMock.runAnalysis.mockImplementationOnce(async (params) => {
-      const mappings = await params.readTopicMappingsImpl?.({
-        candidates: [
-          {
-            id: 'c001',
-            sourceLabel: '房间空间',
-            sentiment: 'positive',
-            count: 1,
-            quotes: ['房间很大'],
-          },
-          {
-            id: 'c002',
-            sourceLabel: '服务态度',
-            sentiment: 'positive',
-            count: 1,
-            quotes: ['服务热情'],
-          },
-        ],
-      });
-      await params.onTopicMappingUsage?.({
-        cachedMappingCount: mappings?.cachedMappings.length ?? 0,
-        missedCandidateCount: 1,
-        newCandidates: [
-          {
-            id: 'c002',
-            sourceLabel: '服务态度',
-            sentiment: 'positive',
-            count: 1,
-            quotes: ['服务热情'],
-          },
-        ],
-        newGroups: [
-          {
-            mergeKey: '服务态度',
-            sentiment: 'positive',
-            category: '服务',
-            displayTopic: '服务热情，沟通顺畅',
-            summary: '客人认可服务。',
-            members: [
-              {
-                candidateId: 'c002',
-                sourceLabel: '服务态度',
-                acceptedQuotes: ['服务热情'],
-              },
-            ],
-          },
-        ],
-      });
-      return createAnalysisResult(2);
-    });
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-
-    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledWith('topic-cache', expect.any(Object)));
-    expect(runtime.addRecords).toHaveBeenCalledWith(
-      'topic-cache',
-      expect.arrayContaining([
-        expect.objectContaining({
-          fields: expect.objectContaining({
-            'topic-候选标签': '服务态度',
-          }),
-        }),
-      ]),
-    );
-  });
-
-  it('saves newly extracted evidence cache before surfacing topic merge failures', async () => {
-    const sourceRecords = [
-      optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
-    ];
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-      ]),
-      getTableList: vi.fn(async () => [
-        { tableId: 'tbl1', tableName: '酒店评论' },
-      ]),
-      readRecordsPage: vi.fn(async () => ({
-        records: sourceRecords,
-        hasMore: false,
-      })),
-    });
-
-    analysisPipelineMock.runAnalysis.mockImplementationOnce(async (params) => {
-      await params.onCacheUsage?.({
-        cachedEvidenceCount: 0,
-        cachedRecordCount: 0,
-        analyzedRecordCount: 1,
-        newEvidenceItems: [
-          {
-            recordId: 'rec-review-a',
-            quote: '表 A 酒店 评论',
-            sentiment: 'positive',
-            aspectLabel: '新证据',
-          },
-        ],
-      });
-      throw new Error('AI 主题合并失败');
-    });
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-
-    await waitFor(() => expect(Toast.error).toHaveBeenCalledWith(expect.stringContaining('AI 主题合并失败')));
-    expect(runtime.addTable).toHaveBeenCalledWith('AI评论证据缓存', expect.any(Array));
-    expect(runtime.addRecords).toHaveBeenCalledWith(
-      'cache-table',
-      expect.arrayContaining([
-        expect.objectContaining({
-          fields: expect.objectContaining({
-            'cache-数据表 ID': 'tbl1',
-            'cache-评论 recordId': 'rec-review-a',
-            'cache-模型': DEFAULT_CONFIG.ai.model,
-            'cache-抽取规则版本': 'evidence-v1.3-topic-quality',
-            'cache-证据 JSON': JSON.stringify([
-              {
-                recordId: 'rec-review-a',
-                quote: '表 A 酒店 评论',
-                sentiment: 'positive',
-                aspectLabel: '新证据',
-              },
-            ]),
-          }),
-        }),
-      ]),
-    );
-  });
-
-  it('marks cached analysis stale when Dashboard host data changes', async () => {
-    let dataChangeHandler: ((data: unknown[][]) => void) | undefined;
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: withAiKey(
-          withSource({
-            tableId: 'tbl1',
-            fields: optionFieldMapping('a'),
-          }),
-        ),
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-      ]),
-      onDataChange: vi.fn((handler) => {
-        dataChangeHandler = handler;
-        return () => undefined;
-      }),
-      readRecordsPage: vi.fn(async () => ({
-        records: [
-          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
-          optionRecordWithReviewId('a', 'review-b', '表 A 新酒店', '2026-06-01 00:00:00'),
-        ],
-        hasMore: false,
-      })),
-    });
-
-    analysisPipelineMock.runAnalysis.mockResolvedValueOnce(createAnalysisResult(1));
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getAllByText('更新分析')[0]);
-    await waitFor(() => expect(analysisPipelineMock.runAnalysis).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).not.toBeInTheDocument();
-
-    act(() => {
-      dataChangeHandler?.([
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
-      ]);
-    });
-
-    await waitFor(() =>
-      expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument(),
-    );
-  });
-
-  it('marks cached analysis stale on first display load when host data scope differs from cached scope', async () => {
-    const cachedScope = {
-      filters: DEFAULT_CONFIG.filters,
-      fields: optionFieldMapping('a'),
-      model: DEFAULT_CONFIG.ai.model,
-      analysisCopyVersion: 'v1.2-conversational-copy',
-      totalReviews: 1,
-      firstRecordId: 'rec-review-a',
-      lastRecordId: 'rec-review-a',
-      source: {
-        tableId: 'tbl1',
-        dataRange: undefined,
-        hostDataSignal: 'host-visible-review-ids:review-a',
-      },
-    };
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: {
-          ...withAiKey(
-            withSource({
-              tableId: 'tbl1',
-              fields: optionFieldMapping('a'),
-            }),
-          ),
-          analysisCache: {
-            result: createAnalysisResult(1),
-            scopeSnapshot: cachedScope,
-            sourceSnapshot: withSource({
-              tableId: 'tbl1',
-              fields: optionFieldMapping('a'),
-            }).source,
-            model: DEFAULT_CONFIG.ai.model,
-            generatedAt: '2026-06-16T00:00:00.000Z',
-          },
-        },
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-b', text: 'review-b', groupKey: 'review-b' }],
-      ]),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecordWithReviewId('a', 'review-b', '表 A 新酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
-    });
-
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
-  });
-
-  it('marks cached analysis stale on first display load when the source view changes but host IDs stay the same', async () => {
-    const cachedScope = {
-      filters: DEFAULT_CONFIG.filters,
-      fields: optionFieldMapping('a'),
-      model: DEFAULT_CONFIG.ai.model,
-      analysisCopyVersion: 'v1.2-conversational-copy',
-      totalReviews: 1,
-      firstRecordId: 'rec-review-a',
-      lastRecordId: 'rec-review-a',
-      source: {
-        tableId: 'tbl1',
-        dataRange: viewDataRange('view-a', '有效评论'),
-        hostDataSignal: 'host-visible-review-ids:review-a',
-      },
-    };
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: {
-          ...withAiKey(
-            withSource({
-              tableId: 'tbl1',
-              viewId: 'view-b',
-              dataRange: viewDataRange('view-b', '有效评论'),
-              fields: optionFieldMapping('a'),
-            }),
-          ),
-          analysisCache: {
-            result: createAnalysisResult(1),
-            scopeSnapshot: cachedScope,
-            sourceSnapshot: withSource({
-              tableId: 'tbl1',
-              viewId: 'view-a',
-              dataRange: viewDataRange('view-a', '有效评论'),
-              fields: optionFieldMapping('a'),
-            }).source,
-            model: DEFAULT_CONFIG.ai.model,
-            generatedAt: '2026-06-16T00:00:00.000Z',
-          },
-        },
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-      ]),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecordWithReviewId('a', 'review-a', '表 A 新酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
-    });
-
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
-  });
-
-  it('marks cached analysis stale on first display load when the saved AI model changes', async () => {
-    const cachedScope = {
-      filters: DEFAULT_CONFIG.filters,
-      fields: optionFieldMapping('a'),
-      model: DEFAULT_CONFIG.ai.model,
-      analysisCopyVersion: 'v1.2-conversational-copy',
-      totalReviews: 1,
-      firstRecordId: 'rec-review-a',
-      lastRecordId: 'rec-review-a',
-      source: {
-        tableId: 'tbl1',
-        dataRange: undefined,
-        hostDataSignal: 'host-visible-review-ids:review-a',
-      },
-    };
-    const runtime = fakeRuntime({
-      getState: () => 'View',
-      getConfig: vi.fn(async () => ({
-        dataConditions: [],
-        customConfig: {
-          ...withAiKey({
-            ...withSource({
-              tableId: 'tbl1',
-              fields: optionFieldMapping('a'),
-            }),
-            ai: {
-              ...DEFAULT_CONFIG.ai,
-              apiKey: 'sk-test',
-              model: 'qwen-max',
-            },
-          }),
-          analysisCache: {
-            result: createAnalysisResult(1),
-            scopeSnapshot: cachedScope,
-            sourceSnapshot: withSource({
-              tableId: 'tbl1',
-              fields: optionFieldMapping('a'),
-            }).source,
-            model: DEFAULT_CONFIG.ai.model,
-            generatedAt: '2026-06-16T00:00:00.000Z',
-          },
-        },
-      })),
-      getData: vi.fn(async () => [
-        [{ value: '评论ID', text: '评论ID', groupKey: null }],
-        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
-      ]),
-      readRecordsPage: vi.fn(async () => ({
-        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
-        hasMore: false,
-      })),
-    });
-
-    runtimeRef.current = runtime;
-
-    render(<App />);
-
-    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
   });
 
   it('keeps the latest selected table when category requests resolve out of order', async () => {
@@ -2291,15 +1987,7 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
     onDataChange: vi.fn(() => () => undefined),
     onConfigChange: vi.fn(() => () => undefined),
     getTableList: vi.fn(async () => [{ tableId: 'tbl1', tableName: '酒店评论' }]),
-    getFieldMetaList: vi.fn(async (tableId: string) =>
-      tableId === 'cache-table'
-        ? evidenceCacheFieldNames.map((fieldName) => ({
-            fieldId: `cache-${fieldName}`,
-            fieldName,
-            fieldType: 'text',
-          }))
-        : [],
-    ),
+    getFieldMetaList: vi.fn(async () => []),
     getTableDataRange: vi.fn(async () => [{ type: SourceType.ALL }]),
     getCategories: vi.fn(async () => []),
     readRecordsPage: vi.fn(),
@@ -2309,6 +1997,8 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
     addRecords: vi.fn(async (_tableId, records) => records.map((_, index) => `write-${index}`)),
     setRecords: vi.fn(async (_tableId, records) => records.map((record) => ({ recordId: record.recordId }))),
     setRendered: vi.fn(async () => true),
+    getTenantKey: vi.fn(async () => 'fixture-tenant'),
+    getBaseUserId: vi.fn(async () => 'fixture-user'),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
     ...overrides,
   };
@@ -2317,6 +2007,11 @@ function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntim
 function withSource(source: Partial<PluginConfig['source']>): PluginConfig {
   return {
     ...DEFAULT_CONFIG,
+    backend: {
+      ...DEFAULT_CONFIG.backend,
+      endpointUrl: 'https://backend.example.com',
+      baseToken: 'base-token',
+    },
     source: {
       ...DEFAULT_CONFIG.source,
       ...source,
@@ -2426,34 +2121,6 @@ function createAnalysisResult(totalReviews: number) {
     actionItems: [],
   };
 }
-
-async function hashFor(content: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-const evidenceCacheFieldNames = [
-  '数据表 ID',
-  '评论 recordId',
-  '评论内容 hash',
-  '模型',
-  '抽取规则版本',
-  '证据 JSON',
-  '更新时间',
-  '最近使用时间',
-];
-
-const topicMappingCacheFieldNames = [
-  '数据表 ID',
-  '候选 sentiment',
-  '候选标签归一化 key',
-  '候选标签',
-  '模型',
-  '主题映射规则版本',
-  '映射 JSON',
-  '更新时间',
-  '最近使用时间',
-];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

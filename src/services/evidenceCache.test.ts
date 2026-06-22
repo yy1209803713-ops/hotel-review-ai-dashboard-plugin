@@ -275,6 +275,8 @@ function fakeRuntime(
     addRecords: vi.fn(async (_tableId, records) => records.map((_, index) => `cache-write-${index}`)),
     setRecords: options.setRecords ?? vi.fn(async (_tableId, records) => records.map((record) => ({ recordId: record.recordId }))),
     setRendered: vi.fn(),
+    getTenantKey: vi.fn(async () => 'fixture-tenant'),
+    getBaseUserId: vi.fn(async () => 'fixture-user'),
     getInstanceId: vi.fn(async () => 'fixture-instance'),
   };
 }

@@ -42,13 +42,6 @@ vi.mock('@douyinfe/semi-ui', () => ({
       ))}
     </select>
   ),
-  Switch: (props: { checked?: boolean; onChange?: (checked: boolean) => void }) => (
-    <input
-      type="checkbox"
-      checked={props.checked ?? false}
-      onChange={(event) => props.onChange?.(event.target.checked)}
-    />
-  ),
 }));
 
 describe('ConfigPanel', () => {
@@ -74,13 +67,8 @@ describe('ConfigPanel', () => {
         categories={[]}
         dataRanges={[{ type: SourceType.ALL }]}
         saving={false}
-        testingConnection={false}
         onChange={onChange}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -119,13 +107,8 @@ describe('ConfigPanel', () => {
           { type: SourceType.VIEW, viewId: 'view-a', viewName: '有效评论' },
         ]}
         saving={false}
-        testingConnection={false}
         onChange={onChange}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -157,13 +140,8 @@ describe('ConfigPanel', () => {
         categories={[]}
         dataRanges={[]}
         saving={false}
-        testingConnection={false}
         onChange={vi.fn()}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
       />,
     );
 
@@ -193,20 +171,15 @@ describe('ConfigPanel', () => {
         categories={[]}
         dataRanges={[{ type: SourceType.ALL }]}
         saving={false}
-        testingConnection={false}
         onChange={vi.fn()}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
       />,
     );
 
     expect(screen.getByText('缺少字段映射：评分、评论日期、入住日期、回复内容、房型')).toBeInTheDocument();
   });
 
-  it('allows configuring AI extraction controls and request timeout without topic merge batch controls', () => {
+  it('does not expose browser-owned AI runtime knobs or warmup controls', () => {
     render(
       <ConfigPanel
         config={DEFAULT_CONFIG}
@@ -214,129 +187,60 @@ describe('ConfigPanel', () => {
         categories={[]}
         dataRanges={[{ type: SourceType.ALL }]}
         saving={false}
-        testingConnection={false}
         onChange={vi.fn()}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
       />,
     );
 
-    const numericInputs = screen.getAllByRole('spinbutton');
-    expect(numericInputs[2]).toHaveAttribute('max', '100');
-    expect(numericInputs[3]).toHaveAttribute('max', '100');
-    expect(numericInputs[4]).toHaveAttribute('max', '1200');
-    expect(screen.queryByText('主题合并批次大小')).not.toBeInTheDocument();
-    expect(screen.queryByText('主题合并并发数')).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
+    expect(screen.queryByText('Temperature')).not.toBeInTheDocument();
+    expect(screen.queryByText('Top N')).not.toBeInTheDocument();
+    expect(screen.queryByText('批次大小')).not.toBeInTheDocument();
+    expect(screen.queryByText('并发数')).not.toBeInTheDocument();
+    expect(screen.queryByText('请求超时秒数')).not.toBeInTheDocument();
+    expect(screen.queryByText('缓存预热')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('hotel-review-ai-warmup-endpoint-url')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('hotel-review-ai-warmup-secret')).not.toBeInTheDocument();
+    expect(screen.queryByText('初始化缓存')).not.toBeInTheDocument();
+    expect(screen.queryByText('立即预热')).not.toBeInTheDocument();
   });
 
-  it('emits AI request timeout updates', () => {
+  it('shows backend config fields instead of browser AI key controls', () => {
     const onChange = vi.fn();
-    render(
-      <ConfigPanel
-        config={DEFAULT_CONFIG}
-        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
-        categories={[]}
-        dataRanges={[{ type: SourceType.ALL }]}
-        saving={false}
-        testingConnection={false}
-        onChange={onChange}
-        onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
-      />,
-    );
-
-    const numericInputs = screen.getAllByRole('spinbutton');
-    fireEvent.change(numericInputs[4], { target: { value: '900' } });
-
-    expect(onChange).toHaveBeenCalledWith({
-      ...DEFAULT_CONFIG,
-      ai: {
-        ...DEFAULT_CONFIG.ai,
-        requestTimeoutSeconds: 900,
-      },
-    });
-  });
-
-  it('renders warmup controls and emits endpoint and secret updates', () => {
-    const onChange = vi.fn();
-    render(
-      <ConfigPanel
-        config={DEFAULT_CONFIG}
-        tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
-        categories={[]}
-        dataRanges={[{ type: SourceType.ALL }]}
-        saving={false}
-        testingConnection={false}
-        onChange={onChange}
-        onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={vi.fn()}
-        onWarmupIncremental={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByText('缓存预热')).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('hotel-review-ai-warmup-endpoint-url'), {
-      target: { value: 'https://backend.example.com/api/hotel-review-ai/warmup' },
-    });
-    expect(onChange).toHaveBeenCalledWith({
-      ...DEFAULT_CONFIG,
-      warmup: {
-        ...DEFAULT_CONFIG.warmup,
-        endpointUrl: 'https://backend.example.com/api/hotel-review-ai/warmup',
-      },
-    });
-
-    fireEvent.change(screen.getByLabelText('hotel-review-ai-warmup-secret'), {
-      target: { value: 'warmup-secret' },
-    });
-    expect(onChange).toHaveBeenCalledWith({
-      ...DEFAULT_CONFIG,
-      warmup: {
-        ...DEFAULT_CONFIG.warmup,
-        secret: 'warmup-secret',
-      },
-    });
-  });
-
-  it('calls warmup handlers from warmup action buttons', () => {
-    const onWarmupBootstrap = vi.fn();
-    const onWarmupIncremental = vi.fn();
     render(
       <ConfigPanel
         config={{
           ...DEFAULT_CONFIG,
-          source: {
-            ...DEFAULT_CONFIG.source,
-            tableId: 'table-1',
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
           },
         }}
         tables={[{ tableId: 'table-1', tableName: '酒店评论' }]}
         categories={[]}
         dataRanges={[{ type: SourceType.ALL }]}
         saving={false}
-        testingConnection={false}
-        onChange={vi.fn()}
+        onChange={onChange}
         onSave={vi.fn()}
-        onTestConnection={vi.fn()}
-        warmupRunning={false}
-        onWarmupBootstrap={onWarmupBootstrap}
-        onWarmupIncremental={onWarmupIncremental}
       />,
     );
 
-    fireEvent.click(screen.getByText('初始化缓存'));
-    fireEvent.click(screen.getByText('立即预热'));
+    expect(screen.getByText('后端分析服务')).toBeInTheDocument();
+    expect(screen.getByLabelText('hotel-review-ai-backend-endpoint-url')).toHaveValue('https://backend.example.com');
+    expect(screen.getByLabelText('hotel-review-ai-base-token')).toHaveValue('base-token');
+    expect(screen.getByLabelText('hotel-review-ai-model')).toHaveValue(DEFAULT_CONFIG.ai.model);
+    expect(screen.queryByLabelText('hotel-review-ai-api-key')).not.toBeInTheDocument();
+    expect(screen.queryByText('测试连接')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI API')).not.toBeInTheDocument();
+    expect(screen.queryByText('写回 Base 聚合结果')).not.toBeInTheDocument();
+    expect(screen.queryByText('首次写回会创建「AI分析批次」和「AI主题汇总」两张表。')).not.toBeInTheDocument();
 
-    expect(onWarmupBootstrap).toHaveBeenCalledTimes(1);
-    expect(onWarmupIncremental).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText('hotel-review-ai-model'), { target: { value: 'qwen-max' } });
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      ai: expect.objectContaining({ model: 'qwen-max' }),
+    }));
   });
 });

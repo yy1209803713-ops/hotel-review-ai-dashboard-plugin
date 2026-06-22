@@ -39,6 +39,13 @@ export type AiConfig = {
   topN: number;
 };
 
+export type BackendConfig = {
+  endpointUrl: string;
+  baseToken: string;
+  configId?: string;
+  configVersion?: number;
+};
+
 export type WritebackConfig = {
   enabled: boolean;
   confirmed: boolean;
@@ -66,6 +73,7 @@ export type PluginConfig = {
   source: SourceConfig;
   filters: FilterState;
   ai: AiConfig;
+  backend: BackendConfig;
   warmup: {
     endpointUrl: string;
     secret: string;
