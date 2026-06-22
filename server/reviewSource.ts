@@ -91,7 +91,10 @@ export class FeishuBaseReviewSource implements ReviewSource {
           pageToken,
         });
         for (const record of page.records) {
-          reviews.push(toReviewRecord(record, query.fieldMapping));
+          const normalized = toReviewRecord(record, query.fieldMapping);
+          if (normalized.content.trim()) {
+            reviews.push(normalized);
+          }
         }
         pageToken = page.hasMore ? page.pageToken : undefined;
       } while (pageToken !== undefined && pageToken !== null && pageToken !== '');
@@ -147,23 +150,23 @@ function toReviewRecord(
 
   for (const [name, fieldId] of Object.entries(fieldMapping)) {
     if (!Object.prototype.hasOwnProperty.call(record.fields, fieldId)) {
-      if (isOptionalMappedField(name)) {
+      if (name === 'replyContent') {
         mappedFields[name] = null;
         continue;
       }
       throw new BackendAnalysisError(502, 'read_source', `mapped field ${name}(${fieldId}) is missing in record ${record.recordId}`);
     }
-    mappedFields[name] = record.fields[fieldId] ?? null;
+    mappedFields[name] = normalizeMappedField(name, record.fields[fieldId], record.recordId);
   }
 
   const contentValue = mappedFields.content ?? mappedFields.reviewText;
-  const content = typeof contentValue === 'string' ? contentValue : contentValue === undefined ? undefined : String(contentValue);
+  const content = typeof contentValue === 'string' ? contentValue : '';
   const contentHash = sha256(
     canonicalJson({
       recordId: record.recordId,
       fields: record.fields,
       mappedFields,
-      content: content ?? null,
+      content,
     }),
   );
 
@@ -205,8 +208,88 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function isOptionalMappedField(fieldName: string): boolean {
-  return fieldName === 'replyContent';
+function normalizeMappedField(fieldName: string, rawValue: unknown, recordId: string): unknown {
+  switch (fieldName) {
+    case 'reviewId':
+      return cellToText(rawValue) ?? recordId;
+    case 'content':
+    case 'reviewText':
+    case 'hotelName':
+    case 'roomType':
+      return cellToText(rawValue) ?? '';
+    case 'score':
+      return cellToNumber(rawValue);
+    case 'reviewDate':
+      return cellToText(rawValue);
+    case 'checkInMonth':
+      return cellToFirstText(rawValue);
+    case 'replyContent':
+      return cellToText(rawValue);
+    default:
+      return rawValue ?? null;
+  }
+}
+
+function cellToText(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => cellToText(item))
+      .filter((item): item is string => item !== null)
+      .join('');
+    return text || null;
+  }
+
+  if (typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    if (typeof objectValue.text === 'string') {
+      return objectValue.text;
+    }
+    if (typeof objectValue.name === 'string') {
+      return objectValue.name;
+    }
+  }
+
+  return null;
+}
+
+function cellToFirstText(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const text = cellToText(item);
+      if (text) {
+        return text;
+      }
+    }
+    return null;
+  }
+
+  return cellToText(value);
+}
+
+function cellToNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  const text = cellToText(value);
+  if (!text) {
+    return null;
+  }
+
+  const numberValue = Number(text);
+  return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 function errorMessage(cause: unknown): string {

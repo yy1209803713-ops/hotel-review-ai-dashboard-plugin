@@ -219,6 +219,59 @@ describe('FeishuBaseReviewSource', () => {
     });
   });
 
+  it('normalizes Base cell values to text and drops records with empty normalized content', async () => {
+    const runtime = createRuntime([
+      {
+        records: [
+          {
+            recordId: 'rec-1',
+            fields: {
+              'fld-review': [{ type: 'text', text: '地理位置无与伦比，' }, { type: 'text', text: '服务超一流。' }],
+              'fld-reply': { text: '感谢您的认可' },
+            },
+          },
+          {
+            recordId: 'rec-2',
+            fields: {
+              'fld-review': [{ type: 'text', text: '' }],
+            },
+          },
+        ],
+        hasMore: false,
+      },
+    ]);
+    const source = new FeishuBaseReviewSource({ runtime, now: () => 1_000 });
+
+    const reviews = await source.listReviews({
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl-review',
+      fieldMapping: { content: 'fld-review', replyContent: 'fld-reply' },
+      filters: {},
+    });
+
+    expect(reviews).toEqual([
+      {
+        recordId: 'rec-1',
+        fields: {
+          'fld-review': [{ type: 'text', text: '地理位置无与伦比，' }, { type: 'text', text: '服务超一流。' }],
+          'fld-reply': { text: '感谢您的认可' },
+        },
+        mappedFields: {
+          content: '地理位置无与伦比，服务超一流。',
+          replyContent: '感谢您的认可',
+        },
+        content: '地理位置无与伦比，服务超一流。',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    ]);
+    expect(source.getLastMetrics()).toMatchObject({
+      recordCount: 1,
+      pageCount: 1,
+      readErrorCount: 0,
+    });
+  });
+
   it('wraps OpenAPI read failures with read_source stage and preserves metrics', async () => {
     const runtime = createRuntime([
       {
