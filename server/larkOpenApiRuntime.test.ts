@@ -108,7 +108,7 @@ describe('createLarkOpenApiRuntime', () => {
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
         throw new Error('tenant-token exchange must not be called');
       }
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables') {
         expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         seenBodies.push(JSON.parse(String(init?.body)));
         return jsonResponse({ code: 0, msg: 'success', data: { table_id: 'tbl-cache' } });

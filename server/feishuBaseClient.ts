@@ -14,7 +14,7 @@ type FeishuOpenApiResponse<T> = {
   data?: T;
 };
 
-const FEISHU_OPEN_API_BASE_URL = 'https://open.feishu.cn/open-apis';
+const FEISHU_OPEN_API_BASE_URL = 'https://base-api.feishu.cn/open-apis';
 
 export function createFeishuBaseClient(options: FeishuBaseClientOptions): FeishuBaseClient {
   const authCode = options.authCode.trim();
@@ -53,7 +53,8 @@ function normalizePath(path: string): string {
 async function requestJson<T>(fetchImpl: typeof fetch, url: string, init: RequestInit): Promise<T> {
   const response = await fetchImpl(url, init);
   if (!response.ok) {
-    throw new Error(`Feishu OpenAPI HTTP ${response.status} ${response.statusText || 'error'} for ${url}`);
+    const detail = await readErrorResponseDetail(response, url);
+    throw new Error(`Feishu OpenAPI HTTP ${response.status} ${response.statusText || 'error'} for ${url}${detail}`);
   }
 
   let bodyText: string;
@@ -75,6 +76,38 @@ async function requestJson<T>(fetchImpl: typeof fetch, url: string, init: Reques
   }
 
   return (body.data ?? body) as T;
+}
+
+async function readErrorResponseDetail(response: Response, url: string): Promise<string> {
+  let bodyText: string;
+  try {
+    bodyText = await response.text();
+  } catch (error) {
+    return `: failed to read response body: ${getErrorMessage(error)}`;
+  }
+
+  const trimmedBody = bodyText.trim();
+  if (!trimmedBody) {
+    return '';
+  }
+
+  try {
+    const body = JSON.parse(trimmedBody) as FeishuOpenApiResponse<unknown>;
+    const detailParts: string[] = [];
+    if (body.code !== undefined) {
+      detailParts.push(`code ${body.code}`);
+    }
+    if (body.msg) {
+      detailParts.push(body.msg);
+    }
+    if (detailParts.length > 0) {
+      return `: ${detailParts.join(': ')}`;
+    }
+  } catch {
+    return `: ${trimmedBody}`;
+  }
+
+  return `: ${trimmedBody}`;
 }
 
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {

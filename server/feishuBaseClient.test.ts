@@ -4,7 +4,7 @@ import { createFeishuBaseClient } from './feishuBaseClient';
 describe('createFeishuBaseClient', () => {
   it('sends the auth code as a bearer token and parses Feishu data responses', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe('https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables?page_size=100');
+      expect(String(input)).toBe('https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables?page_size=100');
       expect(init?.headers).toMatchObject({
         Authorization: 'Bearer auth-code-a',
       });
@@ -71,7 +71,7 @@ describe('createFeishuBaseClient', () => {
 
     await expect(client.request('/bitable/v1/apps/base-a/tables')).resolves.toEqual({ ok: true });
 
-    expect(urls).toEqual(['https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables']);
+    expect(urls).toEqual(['https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables']);
   });
 
   it('adds JSON content type when sending a body', async () => {
@@ -96,13 +96,33 @@ describe('createFeishuBaseClient', () => {
   });
 
   it('surfaces non-OK Feishu HTTP responses', async () => {
-    const fetchImpl = vi.fn(async () => new Response('unavailable', { status: 503, statusText: 'Service Unavailable' }));
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ code: 99991663, msg: 'permission denied' }), {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
     const client = createFeishuBaseClient({
       authCode: 'auth-code-a',
       fetchImpl,
     });
 
-    await expect(client.request('/bitable/v1/apps/base-a/tables')).rejects.toThrow('Feishu OpenAPI HTTP 503 Service Unavailable');
+    await expect(client.request('/bitable/v1/apps/base-a/tables')).rejects.toThrow(
+      'Feishu OpenAPI HTTP 403 Forbidden for https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables: code 99991663: permission denied',
+    );
+  });
+
+  it('surfaces raw body from non-OK Feishu HTTP responses when JSON details are unavailable', async () => {
+    const fetchImpl = vi.fn(async () => new Response('upstream unavailable', { status: 503, statusText: 'Service Unavailable' }));
+    const client = createFeishuBaseClient({
+      authCode: 'auth-code-a',
+      fetchImpl,
+    });
+
+    await expect(client.request('/bitable/v1/apps/base-a/tables')).rejects.toThrow(
+      'Feishu OpenAPI HTTP 503 Service Unavailable for https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables: upstream unavailable',
+    );
   });
 
   it('surfaces non-zero Feishu response codes', async () => {
@@ -113,7 +133,7 @@ describe('createFeishuBaseClient', () => {
     });
 
     await expect(client.request('/bitable/v1/apps/base-a/tables')).rejects.toThrow(
-      'Feishu OpenAPI code 99991663 for https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables: permission denied',
+      'Feishu OpenAPI code 99991663 for https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-a/tables: permission denied',
     );
   });
 

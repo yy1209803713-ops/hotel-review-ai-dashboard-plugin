@@ -17,7 +17,7 @@ describe('createFeishuBaseApi', () => {
   it('maps page requests to listBase tables and auto-encodes base token', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      expect(url).toBe('https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables?page_size=2');
+      expect(url).toBe('https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables?page_size=2');
       return jsonResponse({
         code: 0,
         msg: 'success',
@@ -50,7 +50,7 @@ describe('createFeishuBaseApi', () => {
   it('fetches all field pages with helper pagination', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/fields?page_size=2') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/fields?page_size=2') {
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -61,7 +61,7 @@ describe('createFeishuBaseApi', () => {
           },
         });
       }
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/fields?page_size=2&page_token=page-next') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/fields?page_size=2&page_token=page-next') {
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -90,7 +90,7 @@ describe('createFeishuBaseApi', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       expect(url).toBe(
-        'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/records?page_size=50&page_token=cursor-1&view_id=view-active',
+        'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-review/records?page_size=50&page_token=cursor-1&view_id=view-active',
       );
       return jsonResponse({
         code: 0,
@@ -126,11 +126,11 @@ describe('createFeishuBaseApi', () => {
     const seen: unknown[] = [];
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables') {
         seen.push(JSON.parse(String(init?.body)));
         return jsonResponse({ code: 0, msg: 'success', data: { table_id: 'tbl-created' } });
       }
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_create') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_create') {
         seen.push(JSON.parse(String(init?.body)));
         return jsonResponse({
           code: 0,
@@ -138,7 +138,7 @@ describe('createFeishuBaseApi', () => {
           data: { records: [{ record_id: 'rec-created' }] },
         });
       }
-      if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_update') {
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_update') {
         seen.push(JSON.parse(String(init?.body)));
         return jsonResponse({
           code: 0,
