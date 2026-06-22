@@ -1,10 +1,12 @@
-import { createFeishuBaseClient, type FeishuBaseClient } from './feishuBaseClient';
+import { buildFieldMetaIndex, createFeishuBaseApi, type FeishuBaseApi } from './feishuBaseApi';
+import type { FeishuBaseClient } from './feishuBaseClient';
 
 export type LarkOpenApiRuntimeOptions = {
   baseToken: string;
   authCode?: string;
   fetchImpl?: typeof fetch;
   client?: FeishuBaseClient;
+  api?: FeishuBaseApi;
 };
 
 export type RuntimeTable = {
@@ -40,7 +42,21 @@ export type LarkOpenApiRuntime = {
 const FIELD_META_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): LarkOpenApiRuntime {
-  const client = options.client ?? createFeishuBaseClient({ authCode: requireString(options.authCode, 'authCode is required for Feishu Base runtime'), fetchImpl: options.fetchImpl });
+  const baseToken = requireString(options.baseToken, 'baseToken is required for Feishu Base runtime');
+  const api =
+    options.api ??
+    createFeishuBaseApi(
+      options.client
+        ? {
+            baseToken,
+            client: options.client,
+          }
+        : {
+            baseToken,
+            authCode: requireString(options.authCode, 'authCode is required for Feishu Base runtime'),
+            fetchImpl: options.fetchImpl,
+          },
+    );
   const fieldCache = new Map<string, FieldMetaCacheEntry>();
 
   const clearFieldMetaCache = (tableId?: string): void => {
@@ -51,10 +67,6 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
     fieldCache.clear();
   };
 
-  const openApiRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    return client.request<T>(path, init);
-  };
-
   const getFieldMetaList = (tableId: string): Promise<RuntimeCategory[]> => {
     const cached = fieldCache.get(tableId);
     if (cached && cached.expiresAt > Date.now()) {
@@ -62,10 +74,8 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
     }
     fieldCache.delete(tableId);
 
-    const fieldsPromise = listAllPages<OpenApiField>((pageToken) => {
-      const params = createPageParams(100, pageToken);
-      return openApiRequest(`/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables/${encodeURIComponent(tableId)}/fields?${params}`);
-    })
+    const fieldsPromise = api
+      .listAllFields(tableId)
       .then((items) =>
         items.map((field) => ({
           fieldId: requireString(field.field_id, `field_id missing for table ${tableId}`),
@@ -98,10 +108,7 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
 
   const runtime: LarkOpenApiRuntime = {
     async getTableList(): Promise<RuntimeTable[]> {
-      const tables = await listAllPages<OpenApiTable>((pageToken) => {
-        const params = createPageParams(100, pageToken);
-        return openApiRequest(`/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables?${params}`);
-      });
+      const tables = await api.listAllTables();
 
       return tables.map((table) => ({
         tableId: requireString(table.table_id, 'table_id missing in Base table list'),
@@ -116,15 +123,9 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
     },
 
     async readRecordsPage(tableId: string, params: { viewId?: string; pageSize: number; pageToken?: unknown }): Promise<RecordsPage> {
-      const searchParams = createPageParams(params.pageSize, params.pageToken);
-      if (params.viewId) {
-        searchParams.set('view_id', params.viewId);
-      }
       const [fields, page] = await Promise.all([
         getFieldMetaList(tableId),
-        openApiRequest<{ items?: OpenApiRecord[]; has_more?: boolean; page_token?: string }>(
-          `/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables/${encodeURIComponent(tableId)}/records?${searchParams}`,
-        ),
+        api.listRecordsPage(tableId, params),
       ]);
       const fieldMetaByKey = buildFieldMetaIndex(fields);
 
@@ -152,15 +153,7 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
     },
 
     async addTable(name: string, fields: unknown[]): Promise<{ tableId: string }> {
-      const data = await openApiRequest<{ table_id?: string }>(`/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables`, {
-        method: 'POST',
-        body: JSON.stringify({
-          table: {
-            name,
-            fields: fields.map((field) => toOpenApiField(field)),
-          },
-        }),
-      });
+      const data = await api.createTable(name, fields);
 
       return { tableId: requireString(data.table_id, `table_id missing after creating table ${name}`) };
     },
@@ -171,13 +164,7 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
           fields: await toFieldNames(tableId, record.fields),
         })),
       );
-      const data = await openApiRequest<{ records?: Array<{ record_id?: string }> }>(
-        `/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables/${encodeURIComponent(tableId)}/records/batch_create`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ records: convertedRecords }),
-        },
-      );
+      const data = await api.createRecords(tableId, convertedRecords);
 
       return requireArray(data.records, `records missing after creating records in ${tableId}`).map((record) =>
         requireString(record.record_id, `record_id missing after creating record in ${tableId}`),
@@ -191,13 +178,7 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
           fields: await toFieldNames(tableId, record.fields),
         })),
       );
-      const data = await openApiRequest<{ records?: Array<{ record_id?: string }> }>(
-        `/bitable/v1/apps/${encodeURIComponent(options.baseToken)}/tables/${encodeURIComponent(tableId)}/records/batch_update`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ records: convertedRecords }),
-        },
-      );
+      const data = await api.updateRecords(tableId, convertedRecords);
 
       return requireArray(data.records, `records missing after updating records in ${tableId}`).map((record) => ({
         recordId: requireString(record.record_id, `record_id missing after updating record in ${tableId}`),
@@ -208,58 +189,10 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
   return runtime;
 }
 
-type OpenApiTable = {
-  table_id?: string;
-  name?: string;
-};
-
-type OpenApiField = {
-  field_id?: string;
-  field_name?: string;
-  type?: string | number;
-};
-
-type OpenApiRecord = {
-  record_id?: string;
-  fields?: Record<string, unknown>;
-};
-
 type FieldMetaCacheEntry = {
   promise: Promise<RuntimeCategory[]>;
   expiresAt: number;
 };
-
-async function listAllPages<U>(
-  requestPage: (pageToken?: string) => Promise<{ items?: U[]; has_more?: boolean; page_token?: string }>,
-): Promise<U[]> {
-  const items: U[] = [];
-  let pageToken: string | undefined;
-  do {
-    const page = await requestPage(pageToken);
-    items.push(...requireArray(page.items, 'items missing from Feishu OpenAPI paged response'));
-    pageToken = page.has_more ? requireString(page.page_token, 'page_token missing while has_more is true') : undefined;
-  } while (pageToken);
-  return items;
-}
-
-function createPageParams(pageSize: number, pageToken?: unknown): URLSearchParams {
-  const params = new URLSearchParams({ page_size: String(pageSize) });
-  if (pageToken !== undefined) {
-    params.set('page_token', requireString(pageToken, 'pageToken must be a non-empty string'));
-  }
-  return params;
-}
-
-function toOpenApiField(field: unknown): { field_name: string; type: unknown } {
-  if (!isRecord(field)) {
-    throw new Error('Field definition must be an object');
-  }
-  const name = field.name ?? field.field_name;
-  return {
-    field_name: requireString(name, 'field name missing while creating table'),
-    type: requirePresent(field.type, `field type missing for ${String(name)}`),
-  };
-}
 
 function requireString(value: unknown, message: string): string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -280,17 +213,4 @@ function requireArray<T>(value: T[] | null | undefined, message: string): T[] {
     throw new Error(message);
   }
   return value;
-}
-
-function buildFieldMetaIndex(fields: RuntimeCategory[]): Map<string, RuntimeCategory> {
-  const index = new Map<string, RuntimeCategory>();
-  for (const field of fields) {
-    index.set(field.fieldId, field);
-    index.set(field.fieldName, field);
-  }
-  return index;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

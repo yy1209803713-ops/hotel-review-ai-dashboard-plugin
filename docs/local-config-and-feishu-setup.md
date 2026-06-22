@@ -5,15 +5,14 @@
 在仓库根目录创建 `.env.local`，按需填写：
 
 ```bash
-LARK_APP_ID=cli_xxx
-LARK_APP_SECRET=xxx
+LARK_BASE_AUTH_CODE=pt_xxx
 WARMUP_SECRET=local-warmup-secret
 VITE_BACKEND_ENDPOINT_URL=http://127.0.0.1:8787
 ```
 
 说明：
 
-- `LARK_APP_ID` / `LARK_APP_SECRET` 只给后端用。
+- `LARK_BASE_AUTH_CODE` 是飞书多维表格自定义插件里的授权码，只给后端用。
 - `WARMUP_SECRET` 给插件按钮和飞书工作流调用后端 warmup 接口用。
 - `VITE_BACKEND_ENDPOINT_URL` 只用于前端默认填充 `Backend Endpoint`。
 - shell 里手动设置的同名环境变量优先于 `.env` / `.env.local`。
@@ -38,11 +37,11 @@ https://bytedance.feishu.cn/base/QtTUxxxx?table=tblxxx&view=vewxxx
 
 ## 3. 飞书后台要配什么
 
-1. 在飞书开放平台创建/打开你的自建应用。
-2. 给应用开多维表格相关权限，至少要能读表、读字段、读记录，若要导出摘要还要能写表和写记录。
-3. 把 `LARK_APP_ID` / `LARK_APP_SECRET` 配到后端运行环境，不要放进前端。
-4. 把后端服务地址填到插件的 `Backend Endpoint`。
-5. 把上面的 `Base Token` 填到插件的 `Base Token`。
+1. 打开目标多维表格，在「自定义插件」里获取授权码。
+2. 把这个授权码填到本地 `.env.local` 的 `LARK_BASE_AUTH_CODE`，不要放进前端。
+3. 把后端服务地址填到插件的 `Backend Endpoint`。
+4. 把上面的 `Base Token` 填到插件的 `Base Token`。
+5. 如果你只做这套后端读写，不需要先走新建飞书应用那条路。
 
 ## 4. 启动
 
