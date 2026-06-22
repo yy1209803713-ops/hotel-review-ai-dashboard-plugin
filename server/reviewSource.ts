@@ -147,9 +147,13 @@ function toReviewRecord(
 
   for (const [name, fieldId] of Object.entries(fieldMapping)) {
     if (!Object.prototype.hasOwnProperty.call(record.fields, fieldId)) {
+      if (isOptionalMappedField(name)) {
+        mappedFields[name] = null;
+        continue;
+      }
       throw new BackendAnalysisError(502, 'read_source', `mapped field ${name}(${fieldId}) is missing in record ${record.recordId}`);
     }
-    mappedFields[name] = record.fields[fieldId];
+    mappedFields[name] = record.fields[fieldId] ?? null;
   }
 
   const contentValue = mappedFields.content ?? mappedFields.reviewText;
@@ -199,6 +203,10 @@ function emptyMetrics(): ReviewSourceMetrics {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isOptionalMappedField(fieldName: string): boolean {
+  return fieldName === 'replyContent';
 }
 
 function errorMessage(cause: unknown): string {

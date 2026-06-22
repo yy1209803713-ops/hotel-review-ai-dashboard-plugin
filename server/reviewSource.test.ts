@@ -154,6 +154,71 @@ describe('FeishuBaseReviewSource', () => {
     });
   });
 
+  it('treats replyContent as optional and keeps reading records when it is absent', async () => {
+    const runtime = createRuntime([
+      {
+        records: [
+          {
+            recordId: 'rec-1',
+            fields: {
+              'fld-review': '地理位置无与伦比，历史文化底蕴丰厚，软环境和服务超一流的酒店。',
+              'fld-reply': '感谢您的认可',
+            },
+          },
+          {
+            recordId: 'rec-2',
+            fields: {
+              'fld-review': '房间大，有窗，住14楼，视线很美。',
+            },
+          },
+        ],
+        hasMore: false,
+      },
+    ]);
+    const source = new FeishuBaseReviewSource({ runtime, now: () => 1_000 });
+
+    const reviews = await source.listReviews({
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl-review',
+      fieldMapping: { content: 'fld-review', replyContent: 'fld-reply' },
+      filters: {},
+    });
+
+    expect(reviews).toEqual([
+      {
+        recordId: 'rec-1',
+        fields: {
+          'fld-review': '地理位置无与伦比，历史文化底蕴丰厚，软环境和服务超一流的酒店。',
+          'fld-reply': '感谢您的认可',
+        },
+        mappedFields: {
+          content: '地理位置无与伦比，历史文化底蕴丰厚，软环境和服务超一流的酒店。',
+          replyContent: '感谢您的认可',
+        },
+        content: '地理位置无与伦比，历史文化底蕴丰厚，软环境和服务超一流的酒店。',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+      {
+        recordId: 'rec-2',
+        fields: {
+          'fld-review': '房间大，有窗，住14楼，视线很美。',
+        },
+        mappedFields: {
+          content: '房间大，有窗，住14楼，视线很美。',
+          replyContent: null,
+        },
+        content: '房间大，有窗，住14楼，视线很美。',
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    ]);
+    expect(source.getLastMetrics()).toMatchObject({
+      recordCount: 2,
+      pageCount: 1,
+      readErrorCount: 0,
+    });
+  });
+
   it('wraps OpenAPI read failures with read_source stage and preserves metrics', async () => {
     const runtime = createRuntime([
       {
