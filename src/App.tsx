@@ -297,7 +297,7 @@ export default function App() {
       setAnalysisRunning(true);
       let completedJob: BackendAnalysisJob;
       try {
-        completedJob = await waitForBackendJob(client, ownership, currentJob);
+        completedJob = await waitForBackendJob(client, ownership, currentJob, () => mountedRef.current);
       } finally {
         setAnalysisRunning(false);
       }
@@ -361,7 +361,7 @@ export default function App() {
         configId: upserted.configId,
         forceRefresh: true,
       });
-      const completedJob = await waitForBackendJob(client, ownership, createdJob);
+      const completedJob = await waitForBackendJob(client, ownership, createdJob, () => mountedRef.current);
       if (completedJob.status !== 'success' || !completedJob.resultId) {
         throw new BackendAnalysisError(
           completedJob.errorStage ?? completedJob.stage ?? 'load_config',
@@ -787,9 +787,10 @@ async function waitForBackendJob(
   client: BackendAnalysisClient,
   ownership: BackendOwnership,
   initialJob: BackendAnalysisJob,
+  shouldContinue: () => boolean = () => true,
 ): Promise<BackendAnalysisJob> {
   let job = initialJob;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  while (shouldContinue()) {
     if (COMPLETE_JOB_STATUSES.has(job.status)) {
       return job;
     }
@@ -799,7 +800,7 @@ async function waitForBackendJob(
     }
     await sleep(1000);
   }
-  throw new BackendAnalysisError(job.stage ?? 'load_config', '后端分析任务超时未完成');
+  throw new BackendAnalysisError(job.stage ?? 'load_config', '后端分析任务轮询已停止');
 }
 
 function sleep(ms: number): Promise<void> {

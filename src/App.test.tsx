@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SourceType, type IDataCondition } from '@lark-base-open/js-sdk';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
 import type { DashboardRuntime, RuntimeCategory } from './runtime/sdk';
 import type { RecordsPage } from './services/baseRecords';
@@ -176,6 +176,10 @@ describe('App initialization', () => {
       topicRecordIds: ['rec-topic'],
       exportedAt: '2026-06-18T12:00:00.000Z',
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   afterEach(() => {
@@ -1382,6 +1386,129 @@ describe('App initialization', () => {
       baseUserId: 'fixture-user',
       pluginInstanceId: 'fixture-instance',
       scopeKey: 'scope-actual',
+    });
+  });
+
+  it('keeps polling backend jobs beyond one minute instead of surfacing a local timeout', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getJob.mockResolvedValue({
+      jobId: 'job-1',
+      scopeKey: 'scope-create',
+      status: 'running',
+      stage: 'extract_evidence',
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getAllByText('更新分析')[0]).not.toBeDisabled());
+    vi.useFakeTimers();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+
+    expect(screen.queryByText('extract_evidence 后端分析任务超时未完成')).not.toBeInTheDocument();
+    expect(Toast.error).not.toHaveBeenCalledWith('更新分析失败：extract_evidence 后端分析任务超时未完成');
+    expect(backendAnalysisClientMock.client.getJob.mock.calls.length).toBeGreaterThan(60);
+  });
+
+  it('loads the backend result when a long-running job eventually succeeds', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    const runningJob = {
+      jobId: 'job-1',
+      scopeKey: 'scope-create',
+      status: 'running' as const,
+      stage: 'extract_evidence' as const,
+    };
+    backendAnalysisClientMock.client.getJob
+      .mockResolvedValueOnce(runningJob)
+      .mockResolvedValueOnce(runningJob)
+      .mockResolvedValueOnce(runningJob)
+      .mockResolvedValueOnce({
+        jobId: 'job-1',
+        scopeKey: 'scope-finished',
+        status: 'success',
+        resultId: 'result-long',
+      });
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-long',
+      summary: createAnalysisResult(3),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getAllByText('更新分析')[0]).not.toBeDisabled());
+    vi.useFakeTimers();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      scopeKey: 'scope-finished',
     });
   });
 
