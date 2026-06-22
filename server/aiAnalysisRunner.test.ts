@@ -69,8 +69,8 @@ describe('createAiAnalysisRunner', () => {
 
     const result = await runner.run({
       reviews: [
-        review('rec-positive', '酒店位置非常方便，步行到景点很近。'),
-        review('rec-negative', '房间空调噪音很大，晚上睡不好。'),
+        review('rec-positive', '酒店位置非常方便，步行到景点很近。', '2026-06-10'),
+        review('rec-negative', '房间空调噪音很大，晚上睡不好。', '2026-06-12'),
       ],
       query: {
         tenantKey: 'tenant-a',
@@ -105,16 +105,78 @@ describe('createAiAnalysisRunner', () => {
       噪音: [expect.objectContaining({ recordId: 'rec-negative', sentiment: 'negative' })],
     });
   });
+
+  it('applies filters before sending reviews into analysis', async () => {
+    const runner = createAiAnalysisRunner({
+      env: {
+        AI_BASE_URL: 'https://api.example.com/v1',
+        AI_API_KEY: 'sk-test',
+        AI_MODEL: 'qwen-plus',
+      },
+      analyzeBatchImpl: async ({ records }) => {
+        expect(records.map((record) => record.recordId)).toEqual(['rec-match']);
+        return {
+          evidenceItems: [
+            {
+              recordId: 'rec-match',
+              quote: '位置很好',
+              sentiment: 'positive',
+              aspectLabel: '位置',
+            },
+          ],
+        };
+      },
+      mergeTopicsImpl: async ({ candidates }) => ({
+        groups: candidates.map((candidate) => ({
+          mergeKey: candidate.sourceLabel,
+          sentiment: candidate.sentiment,
+          category: candidate.sentiment,
+          displayTopic: candidate.sourceLabel === '位置' ? '位置方便出行省心' : '房间噪音影响睡眠',
+          summary: candidate.sourceLabel,
+          members: [
+            {
+              candidateId: candidate.id,
+              sourceLabel: candidate.sourceLabel,
+            },
+          ],
+        })),
+      }),
+    });
+
+    await runner.run({
+      reviews: [
+        review('rec-match', '酒店位置很好，靠近地铁。'),
+        review('rec-skip', '房间很吵，空调噪音很大。'),
+      ],
+      query: {
+        tenantKey: 'tenant-a',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        fieldMapping: {},
+        filters: {
+          hotelName: 'all',
+          periodType: 'custom',
+          startDate: '2026-06-01',
+          endDate: '2026-06-30',
+          keyword: '位置',
+        },
+      },
+      jobId: 'job-2',
+      pipelineVersion: 'backend-owned-v1',
+    });
+  });
 });
 
-function review(recordId: string, content: string): ReviewRecord {
+function review(recordId: string, content: string, reviewDate = '2026-06-15'): ReviewRecord {
   return {
     recordId,
     fields: {},
     mappedFields: {
       content,
+      reviewDate,
     },
     content,
+    reviewDate,
     contentHash: `${recordId}-hash`,
   };
 }

@@ -2,6 +2,7 @@ import { BackendAnalysisError, type JsonValue, type TopicEvidence } from './back
 import type { AnalysisRunner } from './analysisWorker';
 import type { ReviewRecord, ReviewSourceQuery } from './reviewSource';
 import { DEFAULT_CONFIG } from '../src/constants/defaults';
+import { filterReviews } from '../src/services/filtering';
 import { runAnalysis, type AnalyzeBatchImpl, type MergeTopicsImpl } from '../src/services/analysisPipeline';
 import type { ReviewRecord as PipelineReviewRecord } from '../src/types/analysis';
 import type { AiConfig, FieldMapping, FilterState } from '../src/types/config';
@@ -31,10 +32,12 @@ export function createAiAnalysisRunner(options: AiAnalysisRunnerOptions = {}): A
     async run({ reviews, query }) {
       const config = readAiRuntimeConfig(options.env ?? process.env);
       const now = options.now?.() ?? new Date().toISOString();
+      const filters = readFilterState(query.filters);
+      const filteredReviews = filterReviews(reviews, filters);
       const result = await runAnalysis({
-        records: reviews.map(toPipelineReviewRecord),
+        records: filteredReviews.map(toPipelineReviewRecord),
         config,
-        filters: readFilterState(query.filters),
+        filters,
         fields: readFieldMapping(query.fieldMapping),
         now,
         analyzeBatchImpl: options.analyzeBatchImpl,
