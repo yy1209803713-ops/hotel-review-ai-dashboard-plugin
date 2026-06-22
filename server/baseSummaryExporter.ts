@@ -5,16 +5,12 @@ import {
   type BaseSummaryExporter,
   type ExportBaseSummaryResponse,
 } from './backendAnalysis';
+import { requireFeishuBaseAuthCode, type FeishuBaseRuntimeEnv } from './feishuBaseRuntimeConfig';
 import { createLarkOpenApiRuntime, type LarkOpenApiRuntime } from './larkOpenApiRuntime';
 
 export type FeishuBaseSummaryExporterFactoryOptions = {
   env?: FeishuBaseRuntimeEnv;
   createRuntime?: typeof createLarkOpenApiRuntime;
-};
-
-export type FeishuBaseRuntimeEnv = {
-  LARK_APP_ID?: string;
-  LARK_APP_SECRET?: string;
 };
 
 const SUMMARY_TABLE_NAME = 'AI分析摘要';
@@ -28,7 +24,7 @@ export function createFeishuBaseSummaryExporterFactory(options: FeishuBaseSummar
 }
 
 class FeishuBaseSummaryExporter implements BaseSummaryExporter {
-  private readonly runtimes = new Map<string, LarkOpenApiRuntime>();
+  private readonly runtimesByAuthCode = new Map<string, Map<string, LarkOpenApiRuntime>>();
 
   constructor(
     private readonly env: FeishuBaseRuntimeEnv,
@@ -43,13 +39,6 @@ class FeishuBaseSummaryExporter implements BaseSummaryExporter {
     if (!isNonEmptyString(config.baseToken)) {
       throw new BackendAnalysisError(500, 'export_summary', 'baseToken is required for base summary export');
     }
-    if (!isNonEmptyString(this.env.LARK_APP_ID)) {
-      throw new BackendAnalysisError(500, 'export_summary', 'LARK_APP_ID is required for base summary export');
-    }
-    if (!isNonEmptyString(this.env.LARK_APP_SECRET)) {
-      throw new BackendAnalysisError(500, 'export_summary', 'LARK_APP_SECRET is required for base summary export');
-    }
-
     const runtime = this.getRuntime(config.baseToken);
     const payload = buildBaseSummaryExportPayload(result);
     const summaryTable = await ensureTable(runtime, SUMMARY_TABLE_NAME, summaryFields);
@@ -73,15 +62,20 @@ class FeishuBaseSummaryExporter implements BaseSummaryExporter {
   }
 
   private getRuntime(baseToken: string): LarkOpenApiRuntime {
-    const cacheKey = `${this.env.LARK_APP_ID}:${baseToken}`;
-    let runtime = this.runtimes.get(cacheKey);
+    const authCode = requireFeishuBaseAuthCode(this.env, 'export_summary', 'base summary export');
+    const cacheKey = baseToken;
+    let runtimes = this.runtimesByAuthCode.get(authCode);
+    if (!runtimes) {
+      runtimes = new Map<string, LarkOpenApiRuntime>();
+      this.runtimesByAuthCode.set(authCode, runtimes);
+    }
+    let runtime = runtimes.get(cacheKey);
     if (!runtime) {
       runtime = this.createRuntime({
         baseToken,
-        appId: this.env.LARK_APP_ID!,
-        appSecret: this.env.LARK_APP_SECRET!,
+        authCode,
       });
-      this.runtimes.set(cacheKey, runtime);
+      runtimes.set(cacheKey, runtime);
     }
     return runtime;
   }

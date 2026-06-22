@@ -1,11 +1,7 @@
 import { BackendAnalysisError } from './backendAnalysis';
+import { requireFeishuBaseAuthCode, type FeishuBaseRuntimeEnv } from './feishuBaseRuntimeConfig';
 import { createLarkOpenApiRuntime } from './larkOpenApiRuntime';
 import { FeishuBaseReviewSource, type ReviewRecord, type ReviewSource, type ReviewSourceQuery } from './reviewSource';
-
-export type FeishuBaseRuntimeEnv = {
-  LARK_APP_ID?: string;
-  LARK_APP_SECRET?: string;
-};
 
 export type FeishuBaseReviewSourceFactoryOptions = {
   env?: FeishuBaseRuntimeEnv;
@@ -18,7 +14,7 @@ export function createFeishuBaseReviewSourceFactory(options: FeishuBaseReviewSou
 
 class FeishuBaseReviewSourceFactory implements ReviewSource {
   readonly kind = 'feishu_base';
-  private readonly sources = new Map<string, FeishuBaseReviewSource>();
+  private readonly sourcesByAuthCode = new Map<string, Map<string, FeishuBaseReviewSource>>();
 
   constructor(
     private readonly env: FeishuBaseRuntimeEnv,
@@ -37,24 +33,22 @@ class FeishuBaseReviewSourceFactory implements ReviewSource {
     if (!query.baseToken?.trim()) {
       throw new BackendAnalysisError(400, 'resolve_source', 'baseToken is required for feishu_base review source');
     }
-    if (!this.env.LARK_APP_ID?.trim()) {
-      throw new BackendAnalysisError(500, 'resolve_source', 'LARK_APP_ID is required for feishu_base review source');
+    const authCode = requireFeishuBaseAuthCode(this.env, 'resolve_source', 'feishu_base review source');
+    const cacheKey = query.baseToken;
+    let sources = this.sourcesByAuthCode.get(authCode);
+    if (!sources) {
+      sources = new Map<string, FeishuBaseReviewSource>();
+      this.sourcesByAuthCode.set(authCode, sources);
     }
-    if (!this.env.LARK_APP_SECRET?.trim()) {
-      throw new BackendAnalysisError(500, 'resolve_source', 'LARK_APP_SECRET is required for feishu_base review source');
-    }
-
-    const cacheKey = `${this.env.LARK_APP_ID}:${query.baseToken}`;
-    let source = this.sources.get(cacheKey);
+    let source = sources.get(cacheKey);
     if (!source) {
       source = new FeishuBaseReviewSource({
         runtime: this.createRuntime({
           baseToken: query.baseToken,
-          appId: this.env.LARK_APP_ID,
-          appSecret: this.env.LARK_APP_SECRET,
+          authCode,
         }),
       });
-      this.sources.set(cacheKey, source);
+      sources.set(cacheKey, source);
     }
 
     return source;

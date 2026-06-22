@@ -1288,7 +1288,7 @@ describe('App initialization', () => {
   it('surfaces backend export errors with stage and message', async () => {
     backendAnalysisClientMock.client.exportBaseSummary.mockRejectedValueOnce({
       stage: 'export_summary',
-      message: 'LARK_APP_ID is required for base summary export',
+      message: 'LARK_BASE_AUTH_CODE is required for base summary export',
     });
     const runtime = fakeRuntime({
       getState: () => 'View',
@@ -1323,8 +1323,8 @@ describe('App initialization', () => {
     await waitFor(() => expect(screen.getByText('导出摘要')).toBeInTheDocument());
     fireEvent.click(screen.getByText('导出摘要'));
 
-    await waitFor(() => expect(screen.getByText('export_summary LARK_APP_ID is required for base summary export')).toBeInTheDocument());
-    expect(Toast.error).toHaveBeenCalledWith('导出摘要失败：export_summary LARK_APP_ID is required for base summary export');
+    await waitFor(() => expect(screen.getByText('export_summary LARK_BASE_AUTH_CODE is required for base summary export')).toBeInTheDocument());
+    expect(Toast.error).toHaveBeenCalledWith('导出摘要失败：export_summary LARK_BASE_AUTH_CODE is required for base summary export');
   });
 
   it('uses ownership query for job polling and latest result after backend updates scopeKey', async () => {

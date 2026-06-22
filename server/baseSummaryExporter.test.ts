@@ -41,7 +41,7 @@ describe('createFeishuBaseSummaryExporterFactory', () => {
     const runtime = fakeRuntime();
     const createRuntime = vi.fn(() => runtime);
     const exporter = createFeishuBaseSummaryExporterFactory({
-      env: { LARK_APP_ID: 'cli-a', LARK_APP_SECRET: 'secret-a' },
+      env: { LARK_BASE_AUTH_CODE: 'auth-code-a' },
       createRuntime,
     });
 
@@ -74,8 +74,7 @@ describe('createFeishuBaseSummaryExporterFactory', () => {
 
     expect(createRuntime).toHaveBeenCalledWith({
       baseToken: 'base-token-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
     });
     expect(runtime.addTable).toHaveBeenCalledWith('AI分析摘要', expect.any(Array));
     expect(runtime.addTable).toHaveBeenCalledWith('AI主题摘要', expect.any(Array));
@@ -83,9 +82,85 @@ describe('createFeishuBaseSummaryExporterFactory', () => {
     expect(runtime.addTable).not.toHaveBeenCalledWith('AI评论主题映射缓存', expect.anything());
   });
 
-  it('surfaces missing Feishu app credentials at export_summary stage', async () => {
+  it('creates a separate runtime for the same base token when the env auth code later changes', async () => {
+    const runtime = fakeRuntime();
+    const env = { LARK_BASE_AUTH_CODE: 'auth-code-a' };
+    const createRuntime = vi.fn(() => runtime);
     const exporter = createFeishuBaseSummaryExporterFactory({
-      env: { LARK_APP_ID: '', LARK_APP_SECRET: 'secret-a' },
+      env,
+      createRuntime,
+    });
+    const input = {
+      result: createAnalysisResult(),
+      config: {
+        tenantKey: 'tenant-a',
+        baseUserId: 'user-a',
+        pluginInstanceId: 'plugin-a',
+        configId: 'config-1',
+        configVersion: 1,
+        updatedAt: 'now',
+        baseToken: 'base-token-a',
+        source: {
+          kind: 'feishu_base' as const,
+          tableId: 'tbl-review',
+          fieldMapping: { content: 'fld-content' },
+        },
+      },
+    };
+
+    await exporter.exportBaseSummary(input);
+    env.LARK_BASE_AUTH_CODE = 'auth-code-b';
+    await exporter.exportBaseSummary(input);
+
+    expect(createRuntime).toHaveBeenCalledTimes(2);
+    expect(createRuntime).toHaveBeenNthCalledWith(1, {
+      baseToken: 'base-token-a',
+      authCode: 'auth-code-a',
+    });
+    expect(createRuntime).toHaveBeenNthCalledWith(2, {
+      baseToken: 'base-token-a',
+      authCode: 'auth-code-b',
+    });
+  });
+
+  it('fails on a cached base token when the env auth code is later cleared', async () => {
+    const env = { LARK_BASE_AUTH_CODE: 'auth-code-a' };
+    const createRuntime = vi.fn(() => fakeRuntime());
+    const exporter = createFeishuBaseSummaryExporterFactory({
+      env,
+      createRuntime,
+    });
+    const input = {
+      result: createAnalysisResult(),
+      config: {
+        tenantKey: 'tenant-a',
+        baseUserId: 'user-a',
+        pluginInstanceId: 'plugin-a',
+        configId: 'config-1',
+        configVersion: 1,
+        updatedAt: 'now',
+        baseToken: 'base-token-a',
+        source: {
+          kind: 'feishu_base' as const,
+          tableId: 'tbl-review',
+          fieldMapping: { content: 'fld-content' },
+        },
+      },
+    };
+
+    await exporter.exportBaseSummary(input);
+    env.LARK_BASE_AUTH_CODE = '';
+
+    await expect(exporter.exportBaseSummary(input)).rejects.toMatchObject({
+      name: 'BackendAnalysisError',
+      stage: 'export_summary',
+      message: 'LARK_BASE_AUTH_CODE is required for base summary export',
+    } satisfies Partial<BackendAnalysisError>);
+  });
+
+  it('surfaces missing Feishu auth code at export_summary stage', async () => {
+    const exporter = createFeishuBaseSummaryExporterFactory({
+      env: { LARK_BASE_AUTH_CODE: '' },
       createRuntime: vi.fn(),
     });
 
@@ -110,7 +185,7 @@ describe('createFeishuBaseSummaryExporterFactory', () => {
     ).rejects.toMatchObject({
       name: 'BackendAnalysisError',
       stage: 'export_summary',
-      message: 'LARK_APP_ID is required for base summary export',
+      message: 'LARK_BASE_AUTH_CODE is required for base summary export',
     } satisfies Partial<BackendAnalysisError>);
   });
 });

@@ -2,14 +2,33 @@ import { describe, expect, it, vi } from 'vitest';
 import { createLarkOpenApiRuntime } from './larkOpenApiRuntime';
 
 describe('createLarkOpenApiRuntime', () => {
-  it('uses tenant access token and maps Base tables, fields, and records into DashboardRuntime shape', async () => {
+  it('uses an injected client without requiring auth code options', async () => {
+    const requestedPaths: string[] = [];
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      client: {
+        async request(path) {
+          requestedPaths.push(path);
+          return {
+            has_more: false,
+            items: [{ table_id: 'tbl-review', name: '酒店评论' }],
+          };
+        },
+      },
+    });
+
+    await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
+    expect(requestedPaths).toEqual(['/bitable/v1/apps/base-a/tables?page_size=100']);
+  });
+
+  it('uses auth code bearer auth and maps Base tables, fields, and records into DashboardRuntime shape', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
-        expect(init?.headers).toMatchObject({ Authorization: 'Bearer tenant-token' });
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -20,6 +39,7 @@ describe('createLarkOpenApiRuntime', () => {
         });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/fields?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -33,6 +53,7 @@ describe('createLarkOpenApiRuntime', () => {
         });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/records?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -54,8 +75,7 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
@@ -86,13 +106,15 @@ describe('createLarkOpenApiRuntime', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url === 'https://open.feishu.cn/open-apis/bitable/v1/apps/base-a/tables') {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         seenBodies.push(JSON.parse(String(init?.body)));
         return jsonResponse({ code: 0, msg: 'success', data: { table_id: 'tbl-cache' } });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -106,6 +128,7 @@ describe('createLarkOpenApiRuntime', () => {
         });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_create')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         seenBodies.push(JSON.parse(String(init?.body)));
         return jsonResponse({
           code: 0,
@@ -116,6 +139,7 @@ describe('createLarkOpenApiRuntime', () => {
         });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_update')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         seenBodies.push(JSON.parse(String(init?.body)));
         return jsonResponse({
           code: 0,
@@ -129,8 +153,7 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
@@ -192,7 +215,7 @@ describe('createLarkOpenApiRuntime', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
         return jsonResponse({
@@ -207,8 +230,7 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
@@ -219,7 +241,7 @@ describe('createLarkOpenApiRuntime', () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields?')) {
         return jsonResponse({
@@ -249,8 +271,7 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
@@ -262,18 +283,19 @@ describe('createLarkOpenApiRuntime', () => {
     );
   });
 
-  it('retries tenant auth after a temporary auth failure', async () => {
-    let authCalls = 0;
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+  it('does not exchange tenant tokens before retrying a Base request', async () => {
+    let tableCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        authCalls += 1;
-        if (authCalls === 1) {
-          return new Response('temporarily unavailable', { status: 500, headers: { 'Content-Type': 'text/plain' } });
-        }
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
+        tableCalls += 1;
+        if (tableCalls === 1) {
+          return new Response('temporarily unavailable', { status: 500, headers: { 'Content-Type': 'text/plain' } });
+        }
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -287,35 +309,26 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
     await expect(runtime.getTableList()).rejects.toThrow('Feishu OpenAPI HTTP 500');
     await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
-    expect(authCalls).toBe(2);
+    expect(tableCalls).toBe(2);
   });
 
-  it('refreshes tenant auth after the cached token expires', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-18T00:00:00.000Z'));
-
-    let authCalls = 0;
+  it('uses the same auth code for repeated Base requests without token refresh', async () => {
+    let tableCalls = 0;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        authCalls += 1;
-        return jsonResponse({
-          code: 0,
-          msg: 'ok',
-          tenant_access_token: authCalls === 1 ? 'tenant-token-a' : 'tenant-token-b',
-          expire: authCalls === 1 ? 1 : 7200,
-        });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
+        tableCalls += 1;
         expect(init?.headers).toMatchObject({
-          Authorization: authCalls === 1 ? 'Bearer tenant-token-a' : 'Bearer tenant-token-b',
+          Authorization: 'Bearer auth-code-a',
         });
         return jsonResponse({
           code: 0,
@@ -330,24 +343,20 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 
     await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
-    await vi.advanceTimersByTimeAsync(2_000);
     await expect(runtime.getTableList()).resolves.toEqual([{ tableId: 'tbl-review', tableName: '酒店评论' }]);
-    expect(authCalls).toBe(2);
-
-    vi.useRealTimers();
+    expect(tableCalls).toBe(2);
   });
 
   it('reads records keyed by field id without failing field mapping', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
-        return jsonResponse({ code: 0, msg: 'ok', tenant_access_token: 'tenant-token', expire: 7200 });
+        throw new Error('tenant-token exchange must not be called');
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables?')) {
         return jsonResponse({
@@ -373,7 +382,7 @@ describe('createLarkOpenApiRuntime', () => {
         });
       }
       if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-review/records?')) {
-        expect(init?.headers).toMatchObject({ Authorization: 'Bearer tenant-token' });
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -395,8 +404,7 @@ describe('createLarkOpenApiRuntime', () => {
     });
     const runtime = createLarkOpenApiRuntime({
       baseToken: 'base-a',
-      appId: 'cli-a',
-      appSecret: 'secret-a',
+      authCode: 'auth-code-a',
       fetchImpl,
     });
 

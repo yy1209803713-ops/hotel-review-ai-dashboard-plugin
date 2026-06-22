@@ -1,8 +1,10 @@
+import { createFeishuBaseClient, type FeishuBaseClient } from './feishuBaseClient';
+
 export type LarkOpenApiRuntimeOptions = {
   baseToken: string;
-  appId: string;
-  appSecret: string;
+  authCode?: string;
   fetchImpl?: typeof fetch;
+  client?: FeishuBaseClient;
 };
 
 export type RuntimeTable = {
@@ -35,22 +37,10 @@ export type LarkOpenApiRuntime = {
   setRecords(tableId: string, records: Array<{ recordId: string; fields: Record<string, unknown> }>): Promise<Array<{ recordId: string }>>;
 };
 
-type OpenApiResponse<T> = {
-  code?: number;
-  msg?: string;
-  data?: T;
-  tenant_access_token?: string;
-  expire?: number;
-};
-
-const OPEN_API_BASE_URL = 'https://open.feishu.cn/open-apis';
-const TENANT_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const FIELD_META_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): LarkOpenApiRuntime {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  let tenantTokenCache: TenantTokenCacheEntry | null = null;
-  let tenantTokenRefreshPromise: Promise<TenantTokenCacheEntry> | null = null;
+  const client = options.client ?? createFeishuBaseClient({ authCode: requireString(options.authCode, 'authCode is required for Feishu Base runtime'), fetchImpl: options.fetchImpl });
   const fieldCache = new Map<string, FieldMetaCacheEntry>();
 
   const clearFieldMetaCache = (tableId?: string): void => {
@@ -61,49 +51,8 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
     fieldCache.clear();
   };
 
-  const clearTenantTokenCache = (): void => {
-    tenantTokenCache = null;
-  };
-
-  const getTenantToken = async () => {
-    if (isTenantTokenValid(tenantTokenCache)) {
-      return tenantTokenCache.token;
-    }
-
-    tenantTokenRefreshPromise ??= refreshTenantToken(fetchImpl, options.appId, options.appSecret)
-      .then((entry) => {
-        tenantTokenCache = entry;
-        return entry;
-      })
-      .finally(() => {
-        tenantTokenRefreshPromise = null;
-      });
-
-    const tokenEntry = await tenantTokenRefreshPromise;
-    return tokenEntry.token;
-  };
-
   const openApiRequest = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const token = await getTenantToken();
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      ...normalizeHeaders(init.headers),
-    };
-    if (init.body !== undefined && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
-    }
-
-    try {
-      return await requestJson<T>(fetchImpl, `${OPEN_API_BASE_URL}${path}`, {
-        ...init,
-        headers,
-      });
-    } catch (error) {
-      if (isAuthTokenError(error)) {
-        clearTenantTokenCache();
-      }
-      throw error;
-    }
+    return client.request<T>(path, init);
   };
 
   const getFieldMetaList = (tableId: string): Promise<RuntimeCategory[]> => {
@@ -275,69 +224,10 @@ type OpenApiRecord = {
   fields?: Record<string, unknown>;
 };
 
-type TenantTokenCacheEntry = {
-  token: string;
-  expiresAt: number;
-};
-
 type FieldMetaCacheEntry = {
   promise: Promise<RuntimeCategory[]>;
   expiresAt: number;
 };
-
-async function refreshTenantToken(fetchImpl: typeof fetch, appId: string, appSecret: string): Promise<TenantTokenCacheEntry> {
-  const response = await requestJson<OpenApiResponse<unknown> & { tenant_access_token?: string; expire?: number }>(
-    fetchImpl,
-    `${OPEN_API_BASE_URL}/auth/v3/tenant_access_token/internal`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: appId,
-        app_secret: appSecret,
-      }),
-    },
-  );
-
-  if (!isRecord(response) || typeof response.tenant_access_token !== 'string' || response.tenant_access_token.length === 0) {
-    throw new Error('tenant_access_token missing from Feishu auth response');
-  }
-  if (typeof response.expire !== 'number' || !Number.isFinite(response.expire) || response.expire < 0) {
-    throw new Error('expire missing or invalid from Feishu auth response');
-  }
-
-  return {
-    token: response.tenant_access_token,
-    expiresAt: Date.now() + response.expire * 1000,
-  };
-}
-
-async function requestJson<T>(fetchImpl: typeof fetch, url: string, init: RequestInit): Promise<T> {
-  const response = await fetchImpl(url, init);
-  if (!response.ok) {
-    throw new Error(`Feishu OpenAPI HTTP ${response.status} ${response.statusText || 'error'} for ${url}`);
-  }
-
-  let bodyText: string;
-  try {
-    bodyText = await response.text();
-  } catch (error) {
-    throw new Error(`Feishu OpenAPI invalid JSON for ${url}: ${getErrorMessage(error)}`);
-  }
-
-  let body: OpenApiResponse<T>;
-  try {
-    body = JSON.parse(bodyText) as OpenApiResponse<T>;
-  } catch (error) {
-    throw new Error(`Feishu OpenAPI invalid JSON for ${url}: ${getErrorMessage(error)}`);
-  }
-
-  if (body.code !== 0) {
-    throw new Error(`Feishu OpenAPI code ${body.code ?? 'missing'} for ${url}: ${body.msg ?? 'unknown error'}`);
-  }
-
-  return (body.data ?? body) as T;
-}
 
 async function listAllPages<U>(
   requestPage: (pageToken?: string) => Promise<{ items?: U[]; has_more?: boolean; page_token?: string }>,
@@ -371,19 +261,6 @@ function toOpenApiField(field: unknown): { field_name: string; type: unknown } {
   };
 }
 
-function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
-  if (!headers) {
-    return {};
-  }
-  if (headers instanceof Headers) {
-    return Object.fromEntries(headers.entries());
-  }
-  if (Array.isArray(headers)) {
-    return Object.fromEntries(headers);
-  }
-  return { ...headers };
-}
-
 function requireString(value: unknown, message: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(message);
@@ -412,27 +289,6 @@ function buildFieldMetaIndex(fields: RuntimeCategory[]): Map<string, RuntimeCate
     index.set(field.fieldName, field);
   }
   return index;
-}
-
-function isTenantTokenValid(cache: TenantTokenCacheEntry | null): cache is TenantTokenCacheEntry {
-  return Boolean(cache && Date.now() < cache.expiresAt - TENANT_TOKEN_REFRESH_SKEW_MS);
-}
-
-function isAuthTokenError(error: unknown): boolean {
-  const message = getErrorMessage(error).toLowerCase();
-  return (
-    message.includes('token expired') ||
-    message.includes('access token expired') ||
-    message.includes('tenant token expired') ||
-    message.includes('token invalid') ||
-    message.includes('unauthorized') ||
-    message.includes('authentication') ||
-    message.includes('auth')
-  );
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
