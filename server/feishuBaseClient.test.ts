@@ -113,6 +113,35 @@ describe('createFeishuBaseClient', () => {
     );
   });
 
+  it('retries HTTP 429 responses using retry-after before surfacing failures', async () => {
+    const delays: number[] = [];
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 1254291, msg: 'too many requests' }), {
+          status: 429,
+          statusText: 'Too Many Requests',
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': '2',
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ code: 0, msg: 'success', data: { ok: true } }));
+    const client = createFeishuBaseClient({
+      authCode: 'auth-code-a',
+      fetchImpl,
+      sleep: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    });
+
+    await expect(client.request('/bitable/v1/apps/base-a/tables')).resolves.toEqual({ ok: true });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(delays).toEqual([2_000]);
+  });
+
   it('surfaces raw body from non-OK Feishu HTTP responses when JSON details are unavailable', async () => {
     const fetchImpl = vi.fn(async () => new Response('upstream unavailable', { status: 503, statusText: 'Service Unavailable' }));
     const client = createFeishuBaseClient({

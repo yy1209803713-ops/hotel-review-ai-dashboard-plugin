@@ -52,7 +52,7 @@ export type FeishuBaseReviewSourceOptions = {
   now?: () => number;
 };
 
-const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 500;
 
 export class FeishuBaseReviewSource implements ReviewSource {
   readonly kind = 'feishu_base';

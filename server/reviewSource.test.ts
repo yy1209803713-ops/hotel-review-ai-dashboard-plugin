@@ -39,12 +39,12 @@ describe('FeishuBaseReviewSource', () => {
     const secondVersion = await source.getSourceVersion(query);
 
     expect(runtime.readCalls).toEqual([
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: undefined } },
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: 'next-page' } },
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: undefined } },
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: 'next-page' } },
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: undefined } },
-      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 100, pageToken: 'next-page' } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: undefined } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: 'next-page' } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: undefined } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: 'next-page' } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: undefined } },
+      { tableId: 'tbl-review', params: { viewId: 'vew-active', pageSize: 500, pageToken: 'next-page' } },
     ]);
     expect(reviews).toEqual([
       {
