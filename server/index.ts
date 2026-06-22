@@ -2,7 +2,7 @@ import * as http from 'node:http';
 import { AnalysisBackendService, createConfiguredReviewSources, createInMemoryAnalysisBackendStore } from './backendAnalysis';
 import { handleBackendAnalysisRequest } from './backendAnalysisHandler';
 import { AnalysisJobWorker } from './analysisWorker';
-import { createAiAnalysisRunner } from './aiAnalysisRunner';
+import { createFormalAnalysisCacheRunner } from './formalAnalysisCacheRunner';
 import { createFeishuBaseSummaryExporterFactory } from './baseSummaryExporter';
 import { loadLocalEnvFiles } from './env';
 import { createFeishuBaseReviewSourceFactory } from './reviewSourceRuntime';
@@ -29,7 +29,7 @@ const backendAnalysisWorker = new AnalysisJobWorker({
   reviewSources: {
     feishu_base: feishuBaseReviewSource as ReviewSource,
   },
-  runner: createAiAnalysisRunner(),
+  runner: createFormalAnalysisCacheRunner(),
 });
 const analysisJobQueue = createSerialJobQueue((jobId) => backendAnalysisWorker.runAnalysisJob(jobId));
 
