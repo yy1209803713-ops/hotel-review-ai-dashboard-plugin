@@ -1141,7 +1141,7 @@ describe('App initialization', () => {
     fireEvent.change(screen.getByLabelText('hotel-review-ai-base-token'), { target: { value: 'base-token' } });
     fireEvent.change(screen.getByLabelText('hotel-review-ai-model'), { target: { value: '' } });
     fireEvent.click(screen.getByText('保存配置'));
-    await waitFor(() => expect(screen.getAllByText('请先填写 Model').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('请先填写后端 Model').length).toBeGreaterThan(0));
     expect(runtime.saveConfig).toHaveBeenCalledTimes(2);
   });
 

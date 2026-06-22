@@ -906,7 +906,7 @@ function getBackendValidationMessage(config: PluginConfig): string | null {
   }
 
   if (!config.ai.model.trim()) {
-    return '请先填写 Model';
+    return '请先填写后端 Model';
   }
 
   return null;

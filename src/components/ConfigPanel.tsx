@@ -94,7 +94,7 @@ export function ConfigPanel(props: {
           <Banner
             type="warning"
             closeIcon={null}
-            description="分析任务由后端拥有，前端只保存后端地址和 Base token。"
+            description="分析任务由后端拥有；AI Base URL 和 API Key 填在后端 .env.local，不放进飞书插件。"
           />
           <Field label="Backend Endpoint">
             <Input
@@ -115,7 +115,7 @@ export function ConfigPanel(props: {
               onChange={(value) => update({ backend: { ...props.config.backend, baseToken: value } })}
             />
           </Field>
-          <Field label="Model">
+          <Field label="后端 Model">
             <Input name="hotel-review-ai-model" autoComplete="off" spellCheck={false} value={props.config.ai.model} onChange={(value) => updateAi({ model: value })} />
           </Field>
         </section>

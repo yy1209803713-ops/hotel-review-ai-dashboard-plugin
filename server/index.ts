@@ -1,12 +1,13 @@
 import * as http from 'node:http';
 import { AnalysisBackendService, createConfiguredReviewSources, createInMemoryAnalysisBackendStore } from './backendAnalysis';
 import { handleBackendAnalysisRequest } from './backendAnalysisHandler';
-import { AnalysisJobWorker, type AnalysisRunner } from './analysisWorker';
+import { AnalysisJobWorker } from './analysisWorker';
+import { createAiAnalysisRunner } from './aiAnalysisRunner';
 import { createFeishuBaseSummaryExporterFactory } from './baseSummaryExporter';
 import { loadLocalEnvFiles } from './env';
 import { createFeishuBaseReviewSourceFactory } from './reviewSourceRuntime';
 import { handleWarmupRequest } from './warmupHandler';
-import type { ReviewRecord, ReviewSource } from './reviewSource';
+import type { ReviewSource } from './reviewSource';
 
 loadLocalEnvFiles();
 
@@ -28,7 +29,7 @@ const backendAnalysisWorker = new AnalysisJobWorker({
   reviewSources: {
     feishu_base: feishuBaseReviewSource as ReviewSource,
   },
-  runner: createLocalAnalysisRunner(),
+  runner: createAiAnalysisRunner(),
 });
 const analysisJobQueue = createSerialJobQueue((jobId) => backendAnalysisWorker.runAnalysisJob(jobId));
 
@@ -120,65 +121,4 @@ function createSerialJobQueue(runJob: (jobId: string) => Promise<unknown>) {
       void drain();
     },
   };
-}
-
-function createLocalAnalysisRunner(): AnalysisRunner {
-  return {
-    async run({ reviews, jobId }) {
-      const totalReviews = reviews.length;
-      const evidence = reviews.slice(0, 20).map((review, index) => ({
-        evidenceId: `${jobId}-evidence-${index + 1}`,
-        recordId: review.recordId,
-        quote: getReviewContent(review).slice(0, 240),
-        sentiment: 'positive',
-      }));
-      const topic = {
-        mergeKey: 'backend-summary',
-        topic: '评论摘要',
-        displayTopic: '评论摘要',
-        category: '综合',
-        count: totalReviews,
-        sentiment: 'positive',
-        commentRecordIds: reviews.map((review) => review.recordId),
-        evidencePhrases: evidence.map((item) => item.quote).filter(Boolean).slice(0, 5),
-        summary: '后端已读取当前范围评论并生成分析快照。',
-      };
-
-      return {
-        summary: {
-          analysisId: jobId,
-          generatedAt: new Date().toISOString(),
-          model: 'backend-local-runner',
-          status: 'complete',
-          scope: {
-            hotelName: 'all',
-            periodType: 'custom',
-            startDate: '',
-            endDate: '',
-          },
-          overview: {
-            totalReviews,
-            positiveReviews: totalReviews,
-            negativeOrRiskReviews: 0,
-            mixedReviews: 0,
-            neutralReviews: 0,
-            averageScore: null,
-            replyRate: 0,
-          },
-          positiveTopics: totalReviews ? [topic] : [],
-          negativeTopics: [],
-          actionItems: [],
-        },
-        topics: totalReviews ? [topic] : [],
-        evidenceByTopic: {
-          'backend-summary': evidence,
-        },
-      };
-    },
-  };
-}
-
-function getReviewContent(review: ReviewRecord): string {
-  const value = review.content ?? review.mappedFields.content ?? review.mappedFields.reviewText;
-  return typeof value === 'string' ? value : value == null ? '' : String(value);
 }
