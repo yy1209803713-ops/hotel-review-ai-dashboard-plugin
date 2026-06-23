@@ -83,6 +83,18 @@ export class AnalysisJobWorker {
       };
       job = await this.store.updateJob({ ...job, stage: 'read_reviews', progress: 30 });
       const reviews = await source.listReviews(query);
+      console.info(
+        '__HOTEL_REVIEW_AI_READ_REVIEWS__',
+        JSON.stringify({
+          jobId: job.jobId,
+          sourceKind: config.source.kind,
+          tableId: config.source.tableId ?? null,
+          viewId: config.source.viewId ?? null,
+          reviewCount: reviews.length,
+          firstRecordId: reviews[0]?.recordId ?? null,
+          lastRecordId: reviews[reviews.length - 1]?.recordId ?? null,
+        }),
+      );
       const sourceVersion = await source.getSourceVersion(query, reviews);
       const actualScopeKey = buildAnalysisScopeKey({
         pipelineVersion: this.pipelineVersion,

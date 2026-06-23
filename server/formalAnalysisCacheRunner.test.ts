@@ -216,6 +216,86 @@ describe('createFormalAnalysisCacheRunner', () => {
 
     expect(analyzeBatchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it('normalizes ReviewSource records before applying filters', async () => {
+    const readEvidenceCacheImpl = vi.fn(async (_runtime, { records }) => {
+      expect(records.map((record) => record.recordId)).toEqual(['rec-match']);
+      return {
+        tableId: 'cache-evidence',
+        hits: [],
+        misses: records,
+        diagnostics: emptyDiagnostics(),
+      };
+    });
+    const analyzeBatchImpl = vi.fn(async ({ records }) => {
+      expect(records.map((record) => record.recordId)).toEqual(['rec-match']);
+      return {
+        evidenceItems: [
+          {
+            recordId: 'rec-match',
+            quote: '位置很好',
+            sentiment: 'positive',
+            aspectLabel: '位置',
+          },
+        ],
+      };
+    });
+
+    const runner = createFormalAnalysisCacheRunner({
+      env: {
+        AI_BASE_URL: 'https://api.example.com/v1',
+        AI_API_KEY: 'sk-test',
+        AI_MODEL: 'qwen-plus',
+        LARK_BASE_AUTH_CODE: 'auth-code-a',
+      },
+      analyzeBatchImpl,
+      readEvidenceCacheImpl,
+      readTopicMappingCacheImpl: vi.fn(async () => ({
+        tableId: 'cache-topic',
+        hits: [],
+        misses: [],
+        diagnostics: emptyDiagnostics(),
+      })),
+      saveEvidenceCacheEntriesImpl: vi.fn(async () => undefined),
+      saveTopicMappingCacheEntriesImpl: vi.fn(async () => undefined),
+      createRuntime: vi.fn(() => fakeRuntime()),
+    });
+
+    await runner.run({
+      reviews: [
+        sourceReview('rec-match', {
+          content: '酒店位置很好，靠近地铁。',
+          reviewDate: '2026-06-15 10:00:00',
+        }),
+        sourceReview('rec-outside-date', {
+          content: '酒店位置也不错。',
+          reviewDate: '2026-05-15 10:00:00',
+        }),
+      ],
+      query: {
+        tenantKey: 'tenant-a',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        fieldMapping: {},
+        filters: {
+          hotelName: 'all',
+          periodType: 'custom',
+          startDate: '2026-06-01',
+          endDate: '2026-06-30',
+          checkInMonth: 'all',
+          minScore: null,
+          maxScore: null,
+          replyStatus: 'all',
+          keyword: '位置',
+        },
+      },
+      jobId: 'job-3',
+      pipelineVersion: 'backend-owned-v1',
+    });
+
+    expect(readEvidenceCacheImpl).toHaveBeenCalledTimes(1);
+    expect(analyzeBatchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 function review(recordId: string, content: string): ReviewRecord {
@@ -241,6 +321,27 @@ function review(recordId: string, content: string): ReviewRecord {
     hasReply: false,
     replyContent: '',
     content,
+    contentHash: `${recordId}-hash`,
+  };
+}
+
+function sourceReview(recordId: string, overrides: Partial<Record<string, unknown>>): ReviewRecord {
+  const mappedFields = {
+    reviewId: recordId,
+    hotelName: '昆明中维翠湖宾馆',
+    score: 5,
+    reviewDate: '2026-06-15 10:00:00',
+    checkInMonth: '2026-06-01 00:00:00',
+    roomType: '大床房',
+    replyContent: '',
+    content: '酒店位置很好。',
+    ...overrides,
+  };
+  return {
+    recordId,
+    fields: {},
+    mappedFields,
+    content: String(mappedFields.content ?? ''),
     contentHash: `${recordId}-hash`,
   };
 }

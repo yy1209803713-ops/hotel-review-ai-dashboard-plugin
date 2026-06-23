@@ -165,6 +165,75 @@ describe('createAiAnalysisRunner', () => {
       pipelineVersion: 'backend-owned-v1',
     });
   });
+
+  it('normalizes ReviewSource records before applying filters', async () => {
+    const analyzeBatchImpl = vi.fn(async ({ records }) => {
+      expect(records.map((record) => record.recordId)).toEqual(['rec-match']);
+      return {
+        evidenceItems: [
+          {
+            recordId: 'rec-match',
+            quote: '位置很好',
+            sentiment: 'positive',
+            aspectLabel: '位置',
+          },
+        ],
+      };
+    });
+    const runner = createAiAnalysisRunner({
+      env: {
+        AI_BASE_URL: 'https://api.example.com/v1',
+        AI_API_KEY: 'sk-test',
+        AI_MODEL: 'qwen-plus',
+      },
+      analyzeBatchImpl,
+      mergeTopicsImpl: async ({ candidates }) => ({
+        groups: candidates.map((candidate) => ({
+          mergeKey: candidate.sourceLabel,
+          sentiment: candidate.sentiment,
+          category: '位置',
+          displayTopic: '位置方便出行省心',
+          summary: candidate.sourceLabel,
+          members: [
+            {
+              candidateId: candidate.id,
+              sourceLabel: candidate.sourceLabel,
+            },
+          ],
+        })),
+      }),
+    });
+
+    await runner.run({
+      reviews: [
+        sourceReview('rec-match', {
+          content: '酒店位置很好，靠近地铁。',
+          reviewDate: '2026-06-15 10:00:00',
+        }),
+        sourceReview('rec-outside-date', {
+          content: '酒店位置也不错。',
+          reviewDate: '2026-05-15 10:00:00',
+        }),
+      ],
+      query: {
+        tenantKey: 'tenant-a',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        fieldMapping: {},
+        filters: {
+          hotelName: 'all',
+          periodType: 'custom',
+          startDate: '2026-06-01',
+          endDate: '2026-06-30',
+          keyword: '位置',
+        },
+      },
+      jobId: 'job-3',
+      pipelineVersion: 'backend-owned-v1',
+    });
+
+    expect(analyzeBatchImpl).toHaveBeenCalledTimes(1);
+  });
 });
 
 function review(recordId: string, content: string, reviewDate = '2026-06-15'): ReviewRecord {
@@ -177,6 +246,21 @@ function review(recordId: string, content: string, reviewDate = '2026-06-15'): R
     },
     content,
     reviewDate,
+    contentHash: `${recordId}-hash`,
+  };
+}
+
+function sourceReview(recordId: string, overrides: Partial<Record<string, unknown>>): ReviewRecord {
+  const mappedFields = {
+    content: '酒店位置很好。',
+    reviewDate: '2026-06-15 10:00:00',
+    ...overrides,
+  };
+  return {
+    recordId,
+    fields: {},
+    mappedFields,
+    content: String(mappedFields.content ?? ''),
     contentHash: `${recordId}-hash`,
   };
 }

@@ -39,13 +39,34 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
       const now = options.now?.() ?? new Date().toISOString();
       const filters = readFilterState(query.filters);
       const runtime = createFormalCacheRuntime(query, env, createRuntime);
-      const filteredReviews = filterReviews(reviews, filters);
-      const pipelineRecords = filteredReviews.map(toPipelineReviewRecord);
+      const reviewRecords = reviews.map(toPipelineReviewRecord);
+      const filteredReviews = filterReviews(reviewRecords, filters);
+      console.info(
+        '__HOTEL_REVIEW_AI_FORMAL_FILTER__',
+        JSON.stringify({
+          tableId: query.tableId ?? null,
+          viewId: query.viewId ?? null,
+          rawReviewCount: reviews.length,
+          filteredReviewCount: filteredReviews.length,
+          filters,
+        }),
+      );
+      const pipelineRecords = filteredReviews;
       const evidenceCache = await (options.readEvidenceCacheImpl ?? readEvidenceCache)(runtime, {
         tableId: requireTableId(query),
         model: config.model,
         records: pipelineRecords,
       });
+      console.info(
+        '__HOTEL_REVIEW_AI_FORMAL_CACHE_READ__',
+        JSON.stringify({
+          tableId: query.tableId ?? null,
+          filteredReviewCount: filteredReviews.length,
+          evidenceCacheHits: evidenceCache.hits.length,
+          evidenceCacheMisses: evidenceCache.misses.length,
+          cachedEvidenceItemCount: evidenceCache.hits.reduce((sum, hit) => sum + hit.evidenceItems.length, 0),
+        }),
+      );
       const result = await runAnalysis({
         records: pipelineRecords,
         config,

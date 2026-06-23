@@ -33,9 +33,10 @@ export function createAiAnalysisRunner(options: AiAnalysisRunnerOptions = {}): A
       const config = readAiRuntimeConfig(options.env ?? process.env);
       const now = options.now?.() ?? new Date().toISOString();
       const filters = readFilterState(query.filters);
-      const filteredReviews = filterReviews(reviews, filters);
+      const reviewRecords = reviews.map(toPipelineReviewRecord);
+      const filteredReviews = filterReviews(reviewRecords, filters);
       const result = await runAnalysis({
-        records: filteredReviews.map(toPipelineReviewRecord),
+        records: filteredReviews,
         config,
         filters,
         fields: readFieldMapping(query.fieldMapping),

@@ -344,6 +344,16 @@ export default function App() {
     setLoading(true);
     setAnalysisRunning(true);
     Toast.info('已提交后端分析任务');
+    console.info(
+      '__HOTEL_REVIEW_AI_FRONTEND_ANALYSIS_REQUEST__',
+      JSON.stringify({
+        filters,
+        backendEndpointUrl: config.backend.endpointUrl,
+        baseToken: config.backend.baseToken,
+        tableId: config.source.tableId,
+        viewId: config.source.viewId,
+      }),
+    );
 
     try {
       const configToSave = { ...config, filters };
@@ -429,6 +439,17 @@ export default function App() {
         throw new BackendAnalysisError('validate_response', '后端 latest result 与完成的 job resultId 不一致');
       }
       const result = assertRenderableAnalysisSummary(latest.summary);
+      console.info(
+        '__HOTEL_REVIEW_AI_FRONTEND_ANALYSIS_RESULT__',
+        JSON.stringify({
+          scopeKey,
+          resultId: latest.resultId,
+          totalReviews: result.overview.totalReviews,
+          positiveTopics: result.positiveTopics.length,
+          negativeTopics: result.negativeTopics.length,
+          actionItems: result.actionItems.length,
+        }),
+      );
       setCurrentScopeKey(scopeKey);
       setCurrentResultId(latest.resultId);
       setAnalysis(result);
