@@ -332,11 +332,34 @@ async function analyzeBatches(params: {
         durationMs: roundDuration(nowMs() - startedAt),
         status: 'error',
       });
+      logEvidenceBatchFailure({
+        batchIndex: index,
+        batchCount: params.batches.length,
+        recordCount: batch.length,
+        cause,
+      });
       throw new Error(
         `第 ${index + 1}/${params.batches.length} 批 AI 分析失败（${batch.length} 条评论）：${formatBatchError(cause)}`,
       );
     });
   });
+}
+
+function logEvidenceBatchFailure(params: {
+  batchIndex: number;
+  batchCount: number;
+  recordCount: number;
+  cause: unknown;
+}): void {
+  console.info('__HOTEL_REVIEW_AI_EVIDENCE_BATCH_FAILED__', JSON.stringify({
+    batchIndex: params.batchIndex,
+    batchNumber: params.batchIndex + 1,
+    batchCount: params.batchCount,
+    recordCount: params.recordCount,
+    errorMessage: formatBatchError(params.cause),
+    errorCode: readErrorCode(params.cause),
+    details: readErrorDetails(params.cause),
+  }));
 }
 
 function sortAndLimit(topics: TopicSummary[], limit: number): TopicSummary[] {
@@ -994,6 +1017,16 @@ function unique(values: string[]): string[] {
 
 function formatBatchError(cause: unknown): string {
   return cause instanceof Error ? cause.message : 'AI API 请求失败';
+}
+
+function readErrorCode(cause: unknown): string | undefined {
+  return typeof cause === 'object' && cause !== null && 'code' in cause && typeof cause.code === 'string'
+    ? cause.code
+    : undefined;
+}
+
+function readErrorDetails(cause: unknown): unknown {
+  return typeof cause === 'object' && cause !== null && 'details' in cause ? cause.details : undefined;
 }
 
 function createAnalysisId(now?: string): string {

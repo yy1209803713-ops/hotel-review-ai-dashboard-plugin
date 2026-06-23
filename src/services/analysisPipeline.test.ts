@@ -288,6 +288,54 @@ describe('runAnalysis', () => {
     expect(result.negativeTopics[0].displayTopic).toBe('隔音问题让人满意');
   });
 
+  it('logs structured evidence batch failures with AI error details', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await expect(
+      runAnalysis({
+        records,
+        config: { ...config, maxBatchSize: 2 },
+        filters,
+        fields,
+        analyzeBatchImpl: async ({ records }) => {
+          if (records.some((record) => record.recordId === 'rec3')) {
+            const error = new Error('模型返回内容不是合法 JSON') as Error & {
+              code: string;
+              details: Record<string, unknown>;
+            };
+            error.code = 'invalid_json';
+            error.details = {
+              source: 'model_content',
+              preview: 'not json',
+              rawLength: 8,
+            };
+            throw error;
+          }
+          return { evidenceItems: [] };
+        },
+      }),
+    ).rejects.toThrow('第 2/2 批 AI 分析失败（1 条评论）：模型返回内容不是合法 JSON');
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      '__HOTEL_REVIEW_AI_EVIDENCE_BATCH_FAILED__',
+      JSON.stringify({
+        batchIndex: 1,
+        batchNumber: 2,
+        batchCount: 2,
+        recordCount: 1,
+        errorMessage: '模型返回内容不是合法 JSON',
+        errorCode: 'invalid_json',
+        details: {
+          source: 'model_content',
+          preview: 'not json',
+          rawLength: 8,
+        },
+      }),
+    );
+
+    infoSpy.mockRestore();
+  });
+
   it('runs one merge call per sentiment and keeps cached candidates isolated', async () => {
     const mergeCalls: TopicMergeCandidate[][] = [];
     const result = await runAnalysis({

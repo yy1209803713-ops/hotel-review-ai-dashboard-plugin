@@ -19,10 +19,18 @@ export type AiClientErrorCode =
   | 'invalid_json'
   | 'schema_invalid';
 
+export type AiClientErrorDetails = {
+  source?: 'api_response' | 'model_content';
+  preview?: string;
+  rawLength?: number;
+  [key: string]: unknown;
+};
+
 export class AiClientError extends Error {
   constructor(
     public readonly code: AiClientErrorCode,
     message: string,
+    public readonly details?: AiClientErrorDetails,
   ) {
     super(message);
     this.name = 'AiClientError';
@@ -391,8 +399,10 @@ export async function analyzeBatch(params: {
     if (!content) {
       throw new AiClientError('invalid_json', '模型没有返回 JSON 内容');
     }
+    debugLog('ai.batch.raw-content', content);
 
     const json = parseJsonObject(content);
+    debugLog('ai.batch.parsed-json', json);
     const parsed = batchAiResultSchema.safeParse(json);
     if (!parsed.success) {
       throw new AiClientError('schema_invalid', formatSchemaError(parsed.error));
@@ -519,18 +529,20 @@ async function readJsonResponse(response: Response): Promise<unknown> {
     throw new AiClientError(
       'invalid_json',
       'AI API 返回了 HTML 页面，请检查 API Base URL 是否是 OpenAI-compatible 服务地址，并确认代理转发到 /chat/completions',
+      createRawContentDetails('api_response', text),
     );
   }
 
   try {
     return JSON.parse(trimmed);
   } catch {
-    throw new AiClientError('invalid_json', 'AI API 返回内容不是合法 JSON');
+    throw new AiClientError('invalid_json', 'AI API 返回内容不是合法 JSON', createRawContentDetails('api_response', text));
   }
 }
 
 function parseJsonObject(content: string): unknown {
   const trimmed = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const details = createRawContentDetails('model_content', content);
 
   try {
     return JSON.parse(trimmed);
@@ -541,11 +553,23 @@ function parseJsonObject(content: string): unknown {
       try {
         return JSON.parse(trimmed.slice(start, end + 1));
       } catch {
-        throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON');
+        throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON', details);
       }
     }
-    throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON');
+    throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON', details);
   }
+}
+
+function createRawContentDetails(source: NonNullable<AiClientErrorDetails['source']>, raw: string): AiClientErrorDetails {
+  return {
+    source,
+    preview: previewRawContent(raw),
+    rawLength: raw.length,
+  };
+}
+
+function previewRawContent(raw: string): string {
+  return raw.trim().slice(0, 2000);
 }
 
 function buildBatchPrompt(records: ReviewRecord[]): string {

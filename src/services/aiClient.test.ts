@@ -646,6 +646,22 @@ describe('analyzeBatch', () => {
     await expect(analyzeBatch({ config, records, fetchImpl })).rejects.toMatchObject({ code: 'invalid_json' });
   });
 
+  it('includes a raw content preview when model content is not valid JSON', async () => {
+    const rawContent = 'not json at all';
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: rawContent } }] }), { status: 200 });
+    });
+
+    await expect(analyzeBatch({ config, records, fetchImpl })).rejects.toMatchObject({
+      code: 'invalid_json',
+      details: {
+        source: 'model_content',
+        preview: rawContent,
+        rawLength: rawContent.length,
+      },
+    });
+  });
+
   it('reports HTML responses before trying to parse chat completion payloads', async () => {
     const fetchImpl = vi.fn(async () => new Response('<!doctype html><html></html>', { status: 200 }));
 
