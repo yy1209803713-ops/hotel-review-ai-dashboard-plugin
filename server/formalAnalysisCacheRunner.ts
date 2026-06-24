@@ -1,44 +1,36 @@
-import type { DashboardRuntime } from '../src/runtime/sdk';
 import type { ReviewRecord, ReviewSourceQuery } from './reviewSource';
 import { BackendAnalysisError, type JsonValue, type TopicEvidence } from './backendAnalysis';
 import { readAiRuntimeConfig, type AiRuntimeEnv } from './aiAnalysisRunner';
-import { createLarkOpenApiRuntime } from './larkOpenApiRuntime';
-import { requireFeishuBaseAuthCode, type FeishuBaseRuntimeEnv } from './feishuBaseRuntimeConfig';
 import { DEFAULT_CONFIG } from '../src/constants/defaults';
 import { filterReviews } from '../src/services/filtering';
-import { readEvidenceCache, saveEvidenceCacheEntries } from '../src/services/evidenceCache';
-import {
-  readTopicMappingCache,
-  saveTopicMappingCacheEntries,
-} from '../src/services/topicMappingCache';
 import { runAnalysis, type AnalyzeBatchImpl, type MergeTopicsImpl } from '../src/services/analysisPipeline';
 import type { AnalysisRunner } from './analysisWorker';
 import type { ReviewRecord as PipelineReviewRecord } from '../src/types/analysis';
 import type { FieldMapping, FilterState } from '../src/types/config';
+import {
+  resolveAnalysisCacheSourceIdentity,
+  type AnalysisCacheRepository,
+} from './postgresAnalysisCache';
 
-type FormalAnalysisCacheRuntimeEnv = AiRuntimeEnv & FeishuBaseRuntimeEnv;
+type FormalAnalysisCacheRuntimeEnv = AiRuntimeEnv;
 
 export type FormalAnalysisCacheRunnerOptions = {
   env?: FormalAnalysisCacheRuntimeEnv;
   analyzeBatchImpl?: AnalyzeBatchImpl;
   mergeTopicsImpl?: MergeTopicsImpl;
   now?: () => string;
-  createRuntime?: typeof createLarkOpenApiRuntime;
-  readEvidenceCacheImpl?: typeof readEvidenceCache;
-  saveEvidenceCacheEntriesImpl?: typeof saveEvidenceCacheEntries;
-  readTopicMappingCacheImpl?: typeof readTopicMappingCache;
-  saveTopicMappingCacheEntriesImpl?: typeof saveTopicMappingCacheEntries;
+  cacheRepository?: AnalysisCacheRepository;
 };
 
 export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunnerOptions = {}): AnalysisRunner {
   const env = options.env ?? process.env;
-  const createRuntime = options.createRuntime ?? createLarkOpenApiRuntime;
   return {
     async run({ reviews, query }) {
       const config = readAiRuntimeConfig(env);
       const now = options.now?.() ?? new Date().toISOString();
+      const cacheRepository = requireAnalysisCacheRepository(options.cacheRepository);
       const filters = readFilterState(query.filters);
-      const runtime = createFormalCacheRuntime(query, env, createRuntime);
+      const cacheIdentity = resolveAnalysisCacheSourceIdentity(query);
       const reviewRecords = reviews.map(toPipelineReviewRecord);
       const filteredReviews = filterReviews(reviewRecords, filters);
       console.info(
@@ -52,10 +44,11 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
         }),
       );
       const pipelineRecords = filteredReviews;
-      const evidenceCache = await (options.readEvidenceCacheImpl ?? readEvidenceCache)(runtime, {
-        tableId: requireTableId(query),
+      const evidenceCache = await cacheRepository.readEvidenceCache({
+        ...cacheIdentity,
         model: config.model,
         records: pipelineRecords,
+        now,
       });
       console.info(
         '__HOTEL_REVIEW_AI_FORMAL_CACHE_READ__',
@@ -78,10 +71,11 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
         cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
         cacheMissRecords: evidenceCache.misses,
         readTopicMappingsImpl: async ({ candidates }) => {
-          const cache = await (options.readTopicMappingCacheImpl ?? readTopicMappingCache)(runtime, {
-            tableId: requireTableId(query),
+          const cache = await cacheRepository.readTopicMappingCache({
+            ...cacheIdentity,
             model: config.model,
             candidates,
+            now,
           });
           return {
             cachedMappings: cache.hits.map((hit) => hit.mapping),
@@ -92,8 +86,8 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           if (!evidenceCache.misses.length || !filteredReviews.length) {
             return;
           }
-          await (options.saveEvidenceCacheEntriesImpl ?? saveEvidenceCacheEntries)(runtime, {
-            tableId: requireTableId(query),
+          await cacheRepository.saveEvidenceCacheEntries({
+            ...cacheIdentity,
             model: config.model,
             records: evidenceCache.misses,
             evidenceItems: usage.newEvidenceItems,
@@ -104,8 +98,8 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           if (!usage.newCandidates.length || !usage.newGroups.length) {
             return;
           }
-          await (options.saveTopicMappingCacheEntriesImpl ?? saveTopicMappingCacheEntries)(runtime, {
-            tableId: requireTableId(query),
+          await cacheRepository.saveTopicMappingCacheEntries({
+            ...cacheIdentity,
             model: config.model,
             candidates: usage.newCandidates,
             groups: usage.newGroups,
@@ -135,17 +129,6 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
   };
 }
 
-function createFormalCacheRuntime(
-  query: ReviewSourceQuery,
-  env: FormalAnalysisCacheRuntimeEnv,
-  createRuntime: typeof createLarkOpenApiRuntime,
-): DashboardRuntime {
-  return createRuntime({
-    baseToken: requireBaseToken(query),
-    authCode: requireFeishuBaseAuthCode(env, 'read_evidence_cache', 'formal analysis cache runner'),
-  }) as unknown as DashboardRuntime;
-}
-
 function readFilterState(value: JsonValue | undefined): FilterState {
   const source = isRecord(value) ? value : {};
   return {
@@ -154,18 +137,11 @@ function readFilterState(value: JsonValue | undefined): FilterState {
   } as FilterState;
 }
 
-function requireBaseToken(query: ReviewSourceQuery): string {
-  if (!query.baseToken?.trim()) {
-    throw new BackendAnalysisError(400, 'resolve_source', 'baseToken is required for analysis cache runtime');
+function requireAnalysisCacheRepository(repository: AnalysisCacheRepository | undefined): AnalysisCacheRepository {
+  if (!repository) {
+    throw new BackendAnalysisError(500, 'read_evidence_cache', 'analysis cache repository is required');
   }
-  return query.baseToken;
-}
-
-function requireTableId(query: ReviewSourceQuery): string {
-  if (!query.tableId?.trim()) {
-    throw new BackendAnalysisError(400, 'resolve_source', 'tableId is required for analysis cache runtime');
-  }
-  return query.tableId;
+  return repository;
 }
 
 function readFieldMapping(value: Record<string, string>): FieldMapping {

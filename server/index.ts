@@ -11,6 +11,7 @@ import { loadLocalEnvFiles } from './env';
 import { handleFacilityAnalysisRequest } from './facilityAnalysisHandler';
 import { createFacilityAnalysisRunner } from './facilityAnalysisRunner';
 import { createPostgresAnalysisBackendStore } from './postgresAnalysisStore';
+import { createPostgresAnalysisCacheRepository } from './postgresAnalysisCache';
 import { createPostgresReviewSyncStore } from './postgresReviewSyncStore';
 import { createPostgresFacilityAnalysisStore } from './postgresFacilityAnalysisStore';
 import { PostgresReviewSource } from './postgresReviewSource';
@@ -29,6 +30,7 @@ const facilityAnalysisSecret = process.env.FACILITY_ANALYSIS_SECRET || warmupSec
 const feishuBaseReviewSource = createFeishuBaseReviewSourceFactory();
 const postgresPool = createPostgresPool();
 const backendAnalysisStore = createPostgresAnalysisBackendStore(postgresPool);
+const analysisCacheRepository = createPostgresAnalysisCacheRepository(postgresPool);
 const reviewSyncStore = createPostgresReviewSyncStore(postgresPool);
 const facilityAnalysisStore = createPostgresFacilityAnalysisStore(postgresPool);
 const facilityAnalysisRunner = createFacilityAnalysisRunner({
@@ -59,7 +61,9 @@ const backendAnalysisWorker = new AnalysisJobWorker({
     feishu_base: feishuBaseReviewSource as ReviewSource,
     postgres: postgresReviewSource as ReviewSource,
   },
-  runner: createFormalAnalysisCacheRunner(),
+  runner: createFormalAnalysisCacheRunner({
+    cacheRepository: analysisCacheRepository,
+  }),
 });
 const analysisJobQueue = createSerialJobQueue((jobId) => backendAnalysisWorker.runAnalysisJob(jobId));
 const syncJobQueue = createSerialSyncQueue((jobId) => reviewSyncService.runQueuedSyncJob(jobId));
