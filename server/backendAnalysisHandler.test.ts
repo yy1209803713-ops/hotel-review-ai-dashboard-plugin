@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AnalysisBackendService,
+  BackendAnalysisError,
   completeAnalysisJobForTest,
   createInMemoryAnalysisBackendStore,
   DefaultDeterministicReviewSource,
@@ -290,6 +291,7 @@ describe('handleBackendAnalysisRequest', () => {
 
   it('returns validation errors with stage/message for invalid JSON and missing query params', async () => {
     const { service } = createService();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const invalidJson = await handleBackendAnalysisRequest(
       new Request('http://127.0.0.1:8787/api/hotel-review-ai/configs/upsert', {
@@ -314,6 +316,40 @@ describe('handleBackendAnalysisRequest', () => {
       stage: 'validate_request',
       message: 'missing query params: baseUserId, pluginInstanceId, scopeKey',
     });
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('logs server-side BackendAnalysisError responses for 5xx diagnostics', async () => {
+    const { service } = createService();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(service, 'createOrGetAnalysisJob').mockRejectedValueOnce(
+      new BackendAnalysisError(500, 'sync_source', 'there is no unique or exclusion constraint matching the ON CONFLICT specification'),
+    );
+
+    const response = await postJson(service, '/api/hotel-review-ai/analysis-jobs', {
+      tenantKey: 'tenant-a',
+      baseUserId: 'user-a',
+      pluginInstanceId: 'plugin-a',
+      configId: 'config-1',
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      stage: 'sync_source',
+      message: 'there is no unique or exclusion constraint matching the ON CONFLICT specification',
+    });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '__HOTEL_REVIEW_AI_BACKEND_ERROR__',
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/hotel-review-ai/analysis-jobs',
+        status: 500,
+        stage: 'sync_source',
+        message: 'there is no unique or exclusion constraint matching the ON CONFLICT specification',
+      }),
+    );
+    consoleErrorSpy.mockRestore();
   });
 
   it('returns 404 for missing records and 405 for unsupported methods', async () => {

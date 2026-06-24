@@ -108,6 +108,15 @@ export async function handleBackendAnalysisRequest(
     return jsonResponse({ stage: 'load_config', message: 'not found' } satisfies ErrorBody, 404);
   } catch (cause) {
     if (cause instanceof BackendAnalysisError) {
+      if (cause.status >= 500) {
+        console.error('__HOTEL_REVIEW_AI_BACKEND_ERROR__', {
+          method: request.method,
+          path: url.pathname,
+          status: cause.status,
+          stage: cause.stage,
+          message: cause.message,
+        });
+      }
       return jsonResponse({ stage: cause.stage, message: cause.message } satisfies ErrorBody, cause.status);
     }
     throw cause;
