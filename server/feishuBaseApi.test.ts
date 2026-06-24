@@ -23,7 +23,7 @@ describe('createFeishuBaseApi', () => {
         msg: 'success',
         data: {
           has_more: false,
-          items: [
+          records: [
             { table_id: 'tbl-a', name: 'Reviews' },
             { table_id: 'tbl-b', name: 'Summary' },
           ],
@@ -39,7 +39,7 @@ describe('createFeishuBaseApi', () => {
 
     await expect(api.listTablesPage({ pageSize: 2 })).resolves.toEqual({
       has_more: false,
-      items: [
+      records: [
         { table_id: 'tbl-a', name: 'Reviews' },
         { table_id: 'tbl-b', name: 'Summary' },
       ],
@@ -57,7 +57,7 @@ describe('createFeishuBaseApi', () => {
           data: {
             has_more: true,
             page_token: 'page-next',
-            items: [{ field_id: 'fld-a', field_name: '评论ID', type: 1 }],
+            records: [{ field_id: 'fld-a', field_name: '评论ID', type: 1 }],
           },
         });
       }
@@ -67,7 +67,7 @@ describe('createFeishuBaseApi', () => {
           msg: 'success',
           data: {
             has_more: false,
-            items: [{ field_id: 'fld-b', field_name: '评论内容', type: 1 }],
+            records: [{ field_id: 'fld-b', field_name: '评论内容', type: 1 }],
           },
         });
       }
@@ -98,7 +98,7 @@ describe('createFeishuBaseApi', () => {
         data: {
           has_more: false,
           page_token: '',
-          items: [{ record_id: 'rec-1', fields: { 评论ID: 'R001', 评论内容: 'good' } }],
+          records: [{ record_id: 'rec-1', fields: { 评论ID: 'R001', 评论内容: 'good' } }],
         },
       });
     });
@@ -118,7 +118,7 @@ describe('createFeishuBaseApi', () => {
     ).resolves.toEqual({
       has_more: false,
       page_token: '',
-      items: [{ record_id: 'rec-1', fields: { 评论ID: 'R001', 评论内容: 'good' } }],
+      records: [{ record_id: 'rec-1', fields: { 评论ID: 'R001', 评论内容: 'good' } }],
     });
   });
 
@@ -129,6 +129,10 @@ describe('createFeishuBaseApi', () => {
       if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables') {
         seen.push(JSON.parse(String(init?.body)));
         return jsonResponse({ code: 0, msg: 'success', data: { table_id: 'tbl-created' } });
+      }
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/fields') {
+        seen.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ code: 0, msg: 'success', data: { field_id: 'fld-created' } });
       }
       if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_create') {
         seen.push(JSON.parse(String(init?.body)));
@@ -156,6 +160,7 @@ describe('createFeishuBaseApi', () => {
     });
 
     await expect(api.createTable('AI分析摘要', [{ field_name: '结果', type: 1 }])).resolves.toEqual({ table_id: 'tbl-created' });
+    await expect(api.createField('tbl-created', { name: '变动明细', type: 'text' })).resolves.toEqual({ field_id: 'fld-created' });
     await expect(
       api.createRecords('tbl-created', [{ fields: { 结果: 'OK' } }]),
     ).resolves.toEqual({ records: [{ record_id: 'rec-created' }] });
@@ -170,9 +175,37 @@ describe('createFeishuBaseApi', () => {
           fields: [{ field_name: '结果', type: 1 }],
         },
       },
+      { field_name: '变动明细', type: 1 },
       { records: [{ fields: { 结果: 'OK' } }] },
       { records: [{ record_id: 'rec-created', fields: { 结果: 'Updated' } }] },
     ]);
+  });
+
+  it('normalizes nested create-field responses from Feishu OpenAPI', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/fields');
+      return jsonResponse({
+        code: 0,
+        msg: 'success',
+        data: {
+          field: {
+            field_id: 'fld-nested-created',
+            field_name: '分析时间',
+            type: 5,
+          },
+        },
+      });
+    });
+
+    const api = createFeishuBaseApi({
+      baseToken: 'base-space',
+      authCode: 'auth-code-a',
+      fetchImpl,
+    });
+
+    await expect(api.createField('tbl-created', { name: '分析时间', type: 'datetime' })).resolves.toEqual({
+      field_id: 'fld-nested-created',
+    });
   });
 
   it('surfaces errors when page response items are missing on paged responses', async () => {
@@ -193,7 +226,7 @@ describe('createFeishuBaseApi', () => {
       fetchImpl,
     });
 
-    await expect(api.listAllTables(50)).rejects.toThrow('items missing from Feishu OpenAPI paged response');
+    await expect(api.listAllTables(50)).rejects.toThrow('records missing from Feishu OpenAPI paged response');
   });
 
   it('errors when auth code is missing', () => {

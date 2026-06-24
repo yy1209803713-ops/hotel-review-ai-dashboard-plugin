@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SourceType, type IDataCondition } from '@lark-base-open/js-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from './constants/defaults';
@@ -123,9 +124,10 @@ vi.mock('lottie-web', () => ({
   },
 }));
 
-const { default: App } = await import('./App');
+const { default: App, isFreshDisplayHostDataRequest } = await import('./App');
 const { Toast } = await import('@douyinfe/semi-ui');
 const { getPeriodRange } = await import('./services/filtering');
+const { BackendAnalysisError } = await import('./services/backendAnalysisClient');
 
 describe('App initialization', () => {
   beforeEach(() => {
@@ -183,7 +185,7 @@ describe('App initialization', () => {
   });
 
   afterEach(() => {
-    document.body.innerHTML = '';
+    cleanup();
   });
 
   it('initializes Create state from the first table without calling saved Dashboard config', async () => {
@@ -1190,7 +1192,9 @@ describe('App initialization', () => {
         pluginInstanceId: 'fixture-instance',
         baseToken: 'base-token',
         source: expect.objectContaining({
-          kind: 'feishu_base',
+          kind: 'postgres',
+          sourceId: 'base-token:tbl1',
+          upstreamSourceKind: 'feishu_base',
           tableId: 'tbl1',
         }),
       }),
@@ -1205,6 +1209,68 @@ describe('App initialization', () => {
     expect(analysisPipelineMock.runAnalysis).not.toHaveBeenCalled();
     expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1);
     expect(Toast.error).not.toHaveBeenCalledWith('请先填写并保存 API Key');
+  });
+
+  it('keeps saved View config available for manual analysis when backend restore fails', async () => {
+    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    backendAnalysisClientMock.client.upsertConfig
+      .mockRejectedValueOnce(new Error('restore failed'))
+      .mockResolvedValue({ configId: 'config-1', configVersion: 1 });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('restore failed')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.upsertConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        baseToken: 'base-token',
+        source: expect.objectContaining({
+          tableId: 'tbl1',
+          fieldMapping: optionFieldMapping('a'),
+        }),
+      }),
+    );
+    const requestLog = consoleInfoSpy.mock.calls.find(
+      ([marker]) => marker === '__HOTEL_REVIEW_AI_FRONTEND_ANALYSIS_REQUEST__',
+    );
+    expect(requestLog).toBeDefined();
+    const requestPayload = JSON.parse(String(requestLog?.[1] ?? '{}')) as Record<string, unknown>;
+    expect(requestPayload).toMatchObject({
+      hasBaseToken: true,
+      tableId: 'tbl1',
+    });
+    expect(requestPayload).not.toHaveProperty('baseToken');
+    expect(screen.queryByText(/请先完成字段映射/)).not.toBeInTheDocument();
+    expect(Toast.error).not.toHaveBeenCalledWith(expect.stringMatching(/请先完成字段映射/));
+    consoleInfoSpy.mockRestore();
   });
 
   it('does not rewrite Dashboard config during View restore when backend config metadata is unchanged', async () => {
@@ -1240,6 +1306,184 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(backendAnalysisClientMock.client.resolveScope).toHaveBeenCalledTimes(1));
     expect(runtime.saveConfig).not.toHaveBeenCalled();
+  });
+
+  it('renders the persisted backend result before slow host data resolves in View restore', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(() => new Promise<unknown[][]>(() => undefined)),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-fast',
+      summary: createAnalysisResult(3),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(runtime.getData).toHaveBeenCalledTimes(1);
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(1);
+    expect(runtime.setRendered).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a newer onDataChange generation as fresher than an older background hostData read', () => {
+    expect(isFreshDisplayHostDataRequest(3, 3, 7, 7, 2, 2, true)).toBe(true);
+    expect(isFreshDisplayHostDataRequest(4, 4, 8, 8, 3, 2, true)).toBe(false);
+    expect(isFreshDisplayHostDataRequest(5, 5, 9, 9, 4, 4, false)).toBe(false);
+  });
+
+  it('deduplicates View restore init work under StrictMode for the same runtime state', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(() => new Promise<unknown[][]>(() => undefined)),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValue({
+      resultId: 'result-strict',
+      summary: createAnalysisResult(2),
+    });
+    runtimeRef.current = runtime;
+
+    render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(1);
+    expect(runtime.getData).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(runtime.setRendered).toHaveBeenCalledTimes(1));
+  });
+
+  it('retries backend restore after a failed snapshot instead of reusing a rejected cache entry', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getLatestResult
+      .mockRejectedValueOnce(new Error('restore failed once'))
+      .mockResolvedValueOnce({
+        resultId: 'result-retry',
+        summary: createAnalysisResult(3),
+      });
+    runtimeRef.current = runtime;
+
+    const firstRender = render(<App />);
+    await waitFor(() => expect(screen.getByText('restore failed once')).toBeInTheDocument());
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(1);
+
+    firstRender.unmount();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('restore failed once')).not.toBeInTheDocument();
+  });
+
+  it('loads filter option records without waiting for host data in View restore', async () => {
+    const hostDataGate = deferred<unknown[][]>();
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+            configVersion: 1,
+          },
+        },
+      })),
+      getData: vi.fn(() => hostDataGate.promise),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-fast', '表 快', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.readRecordsPage).toHaveBeenCalledTimes(1));
+    expect(runtime.getData).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      hostDataGate.resolve([
+        [
+          { value: '评论ID', text: '评论ID', groupKey: null },
+          { value: 'review-fast', text: 'review-fast', groupKey: 'review-fast' },
+        ],
+      ]);
+      await hostDataGate.promise;
+    });
+
+    await waitFor(() => expect(screen.getByText('表 快')).toBeInTheDocument());
   });
 
   it('exports the current backend result summary through the backend Base export API', async () => {
@@ -1545,12 +1789,67 @@ describe('App initialization', () => {
       errorStage: 'read_reviews',
       errorMessage: 'Base read denied',
     });
+    backendAnalysisClientMock.client.getLatestResult.mockRejectedValueOnce(
+      new BackendAnalysisError('load_config', 'analysis result not found', 404),
+    );
     runtimeRef.current = runtime;
 
     render(<App />);
 
     await waitFor(() => expect(screen.getByText('read_reviews Base read denied')).toBeInTheDocument());
-    expect(backendAnalysisClientMock.client.getLatestResult).not.toHaveBeenCalled();
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      scopeKey: 'scope-running',
+    });
+    expect(backendAnalysisClientMock.client.getJob).toHaveBeenCalledWith('job-restored', {
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+    });
+  });
+
+  it('renders persisted backend latest result immediately for a running current job without polling before first paint', async () => {
+    const hostDataDeferred = deferred<unknown[][]>();
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(() => hostDataDeferred.promise),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getCurrentJob.mockResolvedValueOnce({
+      jobId: 'job-running',
+      scopeKey: 'scope-running',
+      status: 'running',
+      stage: 'read_reviews',
+    });
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-persisted',
+      summary: createAnalysisResult(3),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledWith({
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+      scopeKey: 'scope-running',
+    });
+    expect(backendAnalysisClientMock.client.getJob).not.toHaveBeenCalled();
+    expect(runtime.getData).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -2098,6 +2397,7 @@ describe('App initialization', () => {
 
 function fakeRuntime(overrides: Partial<DashboardRuntime> = {}): DashboardRuntime {
   return {
+    cacheKey: {},
     isFixture: false,
     getState: () => 'Config',
     getTheme: vi.fn(async () => ({

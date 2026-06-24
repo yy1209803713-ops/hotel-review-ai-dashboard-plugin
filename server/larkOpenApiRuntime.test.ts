@@ -234,7 +234,7 @@ describe('createLarkOpenApiRuntime', () => {
       fetchImpl,
     });
 
-    await expect(runtime.getTableList()).rejects.toThrow('items missing from Feishu OpenAPI paged response');
+    await expect(runtime.getTableList()).rejects.toThrow('records missing from Feishu OpenAPI paged response');
   });
 
   it('throws a clear Error when record write responses omit records', async () => {
@@ -281,6 +281,69 @@ describe('createLarkOpenApiRuntime', () => {
     await expect(runtime.setRecords('tbl-cache', [{ recordId: 'rec-cache-1', fields: { 'fld-model': 'qwen-plus' } }])).rejects.toThrow(
       'records missing after updating records in tbl-cache',
     );
+  });
+
+  it('refreshes field metadata after adding a field before writing records', async () => {
+    let fieldListCalls = 0;
+    const seenBodies: unknown[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/open-apis/auth/v3/tenant_access_token/internal')) {
+        throw new Error('tenant-token exchange must not be called');
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields?')) {
+        fieldListCalls += 1;
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            has_more: false,
+            items: fieldListCalls === 1
+              ? [{ field_id: 'fld-model', field_name: '模型', type: 1 }]
+              : [
+                  { field_id: 'fld-model', field_name: '模型', type: 1 },
+                  { field_id: 'fld-analysis-time', field_name: '分析时间', type: 5 },
+                ],
+          },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/fields')) {
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: { field: { field_id: 'fld-analysis-time', field_name: '分析时间', type: 5 } },
+        });
+      }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_create')) {
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: { records: [{ record_id: 'rec-created' }] },
+        });
+      }
+      throw new Error(`unexpected request ${url}`);
+    });
+    const runtime = createLarkOpenApiRuntime({
+      baseToken: 'base-a',
+      authCode: 'auth-code-a',
+      fetchImpl,
+    });
+
+    await expect(runtime.getFieldMetaList('tbl-cache')).resolves.toEqual([
+      { fieldId: 'fld-model', fieldName: '模型', fieldType: 1 },
+    ]);
+    await expect(runtime.addField('tbl-cache', { name: '分析时间', type: 'datetime' })).resolves.toEqual({
+      fieldId: 'fld-analysis-time',
+    });
+    await expect(runtime.addRecords('tbl-cache', [{ fields: { 分析时间: 1782187500000 } }])).resolves.toEqual(['rec-created']);
+
+    expect(fieldListCalls).toBe(2);
+    expect(seenBodies).toEqual([
+      { field_name: '分析时间', type: 5 },
+      { records: [{ fields: { 分析时间: 1782187500000 } }] },
+    ]);
   });
 
   it('does not exchange tenant tokens before retrying a Base request', async () => {

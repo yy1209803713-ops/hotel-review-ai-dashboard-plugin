@@ -355,8 +355,10 @@ describe('handleBackendAnalysisRequest', () => {
     expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(preflight.headers.get('Access-Control-Allow-Methods')).toContain('POST');
     expect(preflight.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type, Authorization');
+    expect(preflight.headers.get('Access-Control-Allow-Private-Network')).toBe('true');
     expect(json.headers.get('Access-Control-Allow-Methods')).toContain('OPTIONS');
     expect(json.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type, Authorization');
+    expect(json.headers.get('Access-Control-Allow-Private-Network')).toBe('true');
   });
 
   it('returns stage/message when path params contain malformed percent encoding', async () => {

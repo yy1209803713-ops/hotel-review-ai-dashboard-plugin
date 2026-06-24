@@ -92,7 +92,7 @@ export class FeishuBaseReviewSource implements ReviewSource {
         });
         for (const record of page.records) {
           const normalized = toReviewRecord(record, query.fieldMapping);
-          if (normalized.content.trim()) {
+          if ((normalized.content ?? '').trim()) {
             reviews.push(normalized);
           }
         }

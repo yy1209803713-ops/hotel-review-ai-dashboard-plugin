@@ -1,5 +1,37 @@
 # 酒店评论 AI 仪表盘插件当前状态
 
+## 2026-06-24 后端拥有的 Postgres analysis store / read model 验证
+
+本次任务按 `docs/superpowers/plans/2026-06-23-backend-owned-analysis-postgres-persistence.md` 的 B 路径推进：后端数据库成为 `analysis_configs`、`analysis_jobs`、`analysis_results`、topic evidence、`review_records`、`review_source_versions` 和 `sync_jobs` 的事实源。
+
+已验证命令：
+
+```bash
+DATABASE_URL=postgresql://hotel_review_ai:hotel_review_ai_dev@127.0.0.1:5432/hotel_review_ai npm test -- --run server/postgresAnalysisStore.test.ts server/reviewSync.test.ts server/analysisWorker.test.ts src/App.test.tsx server/analysisPreflightSync.test.ts server/indexPostgresWiring.test.ts src/services/backendAnalysisClient.test.ts server/backendAnalysis.test.ts server/backendOwnedMigration.test.ts --exclude '.worktrees/**'
+DATABASE_URL=postgresql://hotel_review_ai:hotel_review_ai_dev@127.0.0.1:5432/hotel_review_ai npm test -- --run --exclude '.worktrees/**'
+npm run build
+docker compose up -d postgres
+docker compose exec -T postgres psql -U hotel_review_ai -d hotel_review_ai -f /dev/stdin < server/migrations/001_backend_owned_analysis.sql
+DATABASE_URL=postgresql://hotel_review_ai:hotel_review_ai_dev@127.0.0.1:5432/hotel_review_ai WARMUP_PORT=8798 npm run server
+```
+
+结果：
+
+- 上述 focused suite 覆盖 Postgres analysis store、review sync、analysis worker、View restore、preflight sync、server wiring、backend client、backend service 和 migration replay；本次运行结果是 9 个测试文件、109 个测试通过。
+- 完整 `npm test -- --run --exclude '.worktrees/**'` 通过，47 个测试文件、317 个测试通过。
+- `npm run build` 通过，只有既有的 Sass deprecation 和 chunk size warning。
+- 本地 Postgres/HTTP smoke 验证 `/api/hotel-review-ai/results/latest` 可以读到手工 seed 的 persisted result，并返回 `configVersion: 3`、`sourceVersion.kind: "postgres"`、`summary.overview.totalReviews: 2`。
+- `POST /api/hotel-review-ai/sync/feishu/record-changed` 的本地 smoke 之前曾在旧数据库 schema 上碰到 `sync_jobs.base_token` 缺列；当前迁移已补齐这组旧表列和状态约束，重放迁移后可以继续 smoke。
+- sync smoke 返回 `202 Accepted` 只代表 receiver/enqueue/DB write 成功；本地 async worker 后续仍可能因为真实 Base app 凭据或 source 配置不足而出现 Feishu OpenAPI `400`，需要单独处理。
+
+当前结论：
+
+- `server/index.ts` 当前使用 `createPostgresAnalysisBackendStore(postgresPool)`，不再接 `createInMemoryAnalysisBackendStore()`；缺少 `DATABASE_URL` 时启动失败，不做内存兜底。
+- 插件前端保存后端分析配置时上送 `source.kind: "postgres"`，保留 `upstreamSourceKind: "feishu_base"`、Base token/table/view/field mapping。
+- `AnalysisBackendService.createOrGetAnalysisJob()` 会在 postgres config 下先跑 `analysis_preflight` sync，再用 `PostgresReviewSource` 解析 scope。
+- View restore 仍要优先读后端 latest result，再异步补 host data 和过滤项，避免慢读挡住首屏。
+- 还没有在真实飞书 Base 授权链路上完整跑一遍全量同步 + AI 分析 + 发布结果；本地验证覆盖的是 Postgres-backed 存取、迁移、server wiring 和 HTTP latest result 读路径。
+
 ## V1.2 AI Cache Warmup 更新
 
 更新时间：2026-06-17

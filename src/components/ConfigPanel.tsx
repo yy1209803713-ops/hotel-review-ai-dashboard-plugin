@@ -2,6 +2,7 @@ import { Banner, Button, Input, Select } from '@douyinfe/semi-ui';
 import { SourceType, type IDataRange } from '@lark-base-open/js-sdk';
 import { DEFAULT_CONFIG, FIELD_LABELS } from '../constants/defaults';
 import type { RuntimeCategory, RuntimeTable } from '../runtime/sdk';
+import { logConfigDebug, summarizeFieldMapping } from '../services/debugLog';
 import { getMissingRequiredFields } from '../services/fieldMapping';
 import type { PluginConfig } from '../types/config';
 
@@ -18,8 +19,16 @@ export function ConfigPanel(props: {
   const update = (patch: Partial<PluginConfig>) => props.onChange({ ...props.config, ...patch });
   const updateAi = (patch: Partial<PluginConfig['ai']>) => update({ ai: { ...props.config.ai, ...patch } });
   const updateSource = (patch: Partial<PluginConfig['source']>) => update({ source: { ...props.config.source, ...patch } });
-  const updateFields = (key: keyof PluginConfig['source']['fields'], value: string) =>
-    updateSource({ fields: { ...props.config.source.fields, [key]: value } });
+  const updateFields = (key: keyof PluginConfig['source']['fields'], value: string) => {
+    const nextFields = { ...props.config.source.fields, [key]: value };
+    logConfigDebug('ConfigPanel:updateField', {
+      key,
+      value,
+      tableId: props.config.source.tableId,
+      fields: summarizeFieldMapping(nextFields),
+    });
+    updateSource({ fields: nextFields });
+  };
   const missingFields = getMissingRequiredFields(props.config.source.fields);
   const dataRangeOptions = buildDataRangeOptions(props.dataRanges);
   const currentDataRangeValue = getDataRangeValue(props.config.source.dataRange);
@@ -40,14 +49,18 @@ export function ConfigPanel(props: {
             <ConfigSelect
               value={props.config.source.tableId}
               optionList={props.tables.map((table) => ({ label: table.tableName, value: table.tableId }))}
-              onChange={(value) =>
+              onChange={(value) => {
+                logConfigDebug('ConfigPanel:updateTable', {
+                  value: String(value),
+                  previousTableId: props.config.source.tableId,
+                });
                 updateSource({
                   tableId: String(value),
                   viewId: undefined,
                   dataRange: undefined,
                   fields: { ...DEFAULT_CONFIG.source.fields },
-                })
-              }
+                });
+              }}
             />
           </Field>
           <Field label="数据范围">
@@ -56,6 +69,11 @@ export function ConfigPanel(props: {
               optionList={dataRangeOptions}
               onChange={(value) => {
                 const dataRange = dataRangeOptions.find((option) => option.value === value)?.dataRange;
+                logConfigDebug('ConfigPanel:updateDataRange', {
+                  value: String(value),
+                  tableId: props.config.source.tableId,
+                  dataRange,
+                });
                 updateSource({
                   dataRange,
                   viewId: getViewIdFromDataRange(dataRange),
@@ -102,7 +120,13 @@ export function ConfigPanel(props: {
               autoComplete="off"
               spellCheck={false}
               value={props.config.backend.endpointUrl}
-              onChange={(value) => update({ backend: { ...props.config.backend, endpointUrl: value } })}
+              onChange={(value) => {
+                logConfigDebug('ConfigPanel:updateBackendEndpoint', {
+                  hasValue: Boolean(value.trim()),
+                  length: value.trim().length,
+                });
+                update({ backend: { ...props.config.backend, endpointUrl: value } });
+              }}
             />
           </Field>
           <Field label="Base Token">
@@ -112,7 +136,13 @@ export function ConfigPanel(props: {
               mode="password"
               spellCheck={false}
               value={props.config.backend.baseToken}
-              onChange={(value) => update({ backend: { ...props.config.backend, baseToken: value } })}
+              onChange={(value) => {
+                logConfigDebug('ConfigPanel:updateBaseToken', {
+                  hasValue: Boolean(value.trim()),
+                  length: value.trim().length,
+                });
+                update({ backend: { ...props.config.backend, baseToken: value } });
+              }}
             />
           </Field>
           <Field label="后端 Model">

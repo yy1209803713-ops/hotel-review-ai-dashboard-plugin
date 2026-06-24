@@ -270,6 +270,8 @@ git commit -m "feat: restore backend analysis before host reads"
 
 ### Task 5: End-to-end verification, docs, and local operator notes
 
+> Status note for this resumed branch: the implementation has been corrected to use the Postgres analysis store in `server/index.ts`. Task 5 should verify the full Postgres-backed backend analysis path, including `server/postgresAnalysisStore.test.ts`, preflight sync, server wiring, View restore, and build.
+
 **Files:**
 - Modify: `docs/backend-local-postgres.md`
 - Modify: `docs/current-status.md`
@@ -318,4 +320,3 @@ Document the new Postgres-first restore path, the `DATABASE_URL` requirement, an
 git add docs/backend-local-postgres.md docs/current-status.md
 git commit -m "docs: record postgres-backed backend analysis workflow"
 ```
-

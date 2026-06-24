@@ -54,6 +54,7 @@ describe('handleWarmupRequest', () => {
     );
 
     expect(response.status).toBe(202);
+    expect(response.headers.get('Access-Control-Allow-Private-Network')).toBe('true');
     await expect(response.json()).resolves.toEqual({
       jobId: 'warmup-2026-06-17T06:00:00.000Z-tbl-review',
       status: 'accepted',
@@ -93,5 +94,19 @@ describe('handleWarmupRequest', () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  it('responds to browser CORS preflight for local backend calls', async () => {
+    const response = await handleWarmupRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/warmup', { method: 'OPTIONS' }),
+      {
+        warmupSecret: 'local-warmup-secret',
+        now: () => '2026-06-17T06:00:00.000Z',
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Methods')).toContain('OPTIONS');
+    expect(response.headers.get('Access-Control-Allow-Private-Network')).toBe('true');
   });
 });

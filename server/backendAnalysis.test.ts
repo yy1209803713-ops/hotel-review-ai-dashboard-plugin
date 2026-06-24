@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AnalysisBackendService,
   buildScopeKey,
@@ -231,6 +231,38 @@ describe('AnalysisBackendService', () => {
     ).resolves.toMatchObject({
       sourceVersion: { kind: 'external', sourceId: 'dataset-reviews', recordCount: 0, generatedAt: 'deterministic' },
     });
+  });
+
+  it('runs analysis_preflight sync before creating a job for a postgres read model config', async () => {
+    const preflightSyncRunner = { run: vi.fn(async () => undefined) };
+    const postgresSource = new MutableFakeReviewSource([review('rec-1', 'Great view')]);
+    const service = new AnalysisBackendService({
+      store: createInMemoryAnalysisBackendStore(),
+      reviewSources: { postgres: postgresSource },
+      preflightSyncRunner,
+    });
+    const config = await service.upsertConfig({
+      ...baseConfigRequest,
+      source: {
+        kind: 'postgres',
+        sourceId: 'base-token-a:tbl-review:vew-active',
+        upstreamSourceKind: 'feishu_base',
+        tableId: 'tbl-review',
+        viewId: 'vew-active',
+        fieldMapping: baseConfigRequest.source.fieldMapping,
+      },
+    });
+
+    const job = await service.createOrGetAnalysisJob({
+      tenantKey: 'tenant-a',
+      baseUserId: 'user-a',
+      pluginInstanceId: 'plugin-a',
+      configId: config.configId,
+    });
+
+    expect(preflightSyncRunner.run).toHaveBeenCalledWith({ config: expect.objectContaining({ configId: config.configId }) });
+    expect(postgresSource.queries).toHaveLength(1);
+    expect(job.status).toBe('queued');
   });
 
   it('keeps the same scopeKey when the same config content is saved as a newer version', async () => {

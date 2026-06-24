@@ -35,6 +35,7 @@ export type LarkOpenApiRuntime = {
   clearFieldMetaCache(tableId?: string): void;
   readRecordsPage(tableId: string, params: { viewId?: string; pageSize: number; pageToken?: unknown }): Promise<RecordsPage>;
   addTable(name: string, fields: unknown[]): Promise<{ tableId: string }>;
+  addField(tableId: string, field: unknown): Promise<{ fieldId: string }>;
   addRecords(tableId: string, records: Array<{ fields: Record<string, unknown> }>): Promise<string[]>;
   setRecords(tableId: string, records: Array<{ recordId: string; fields: Record<string, unknown> }>): Promise<Array<{ recordId: string }>>;
 };
@@ -130,7 +131,7 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
       const fieldMetaByKey = buildFieldMetaIndex(fields);
 
       return {
-        records: requireArray(page.items, `items missing from records response for table ${tableId}`).map((record) => {
+        records: readPageRecords(page, tableId).map((record) => {
           const sourceFields = record.fields ?? {};
           const mappedFields: Record<string, unknown> = { ...sourceFields };
           for (const [fieldName, value] of Object.entries(sourceFields)) {
@@ -156,6 +157,13 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
       const data = await api.createTable(name, fields);
 
       return { tableId: requireString(data.table_id, `table_id missing after creating table ${name}`) };
+    },
+
+    async addField(tableId: string, field: unknown): Promise<{ fieldId: string }> {
+      const data = await api.createField(tableId, field);
+      const fieldId = requireString(data.field_id, `field_id missing after creating field in ${tableId}`);
+      clearFieldMetaCache(tableId);
+      return { fieldId };
     },
 
     async addRecords(tableId: string, records: Array<{ fields: Record<string, unknown> }>): Promise<string[]> {
@@ -213,4 +221,15 @@ function requireArray<T>(value: T[] | null | undefined, message: string): T[] {
     throw new Error(message);
   }
   return value;
+}
+
+function readPageRecords(page: { records?: unknown[]; items?: unknown[]; hasMore?: boolean; has_more?: boolean }, tableId: string): Array<{ record_id?: string; recordId?: string; fields?: Record<string, unknown> }> {
+  const records = page.records ?? page.items;
+  if (Array.isArray(records)) {
+    return records as Array<{ record_id?: string; recordId?: string; fields?: Record<string, unknown> }>;
+  }
+  if (!Boolean(page.hasMore ?? page.has_more)) {
+    return [];
+  }
+  throw new Error(`records missing from records response for table ${tableId}`);
 }

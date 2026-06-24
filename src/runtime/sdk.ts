@@ -42,6 +42,7 @@ export type RuntimeTheme = {
 };
 
 export type DashboardRuntime = {
+  cacheKey?: object;
   isFixture: boolean;
   getState(): DashboardStateName;
   getTheme(): Promise<RuntimeTheme>;

@@ -163,6 +163,7 @@ function jsonResponse(body: unknown, status: number): Response {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Private-Network': 'true',
       'Access-Control-Max-Age': '86400',
       'Content-Type': 'application/json',
     },
@@ -176,6 +177,7 @@ function emptyCorsResponse(status: number): Response {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Private-Network': 'true',
       'Access-Control-Max-Age': '86400',
     },
   });

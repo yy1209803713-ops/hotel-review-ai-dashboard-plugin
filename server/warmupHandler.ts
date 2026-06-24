@@ -20,6 +20,9 @@ export async function handleWarmupRequest(request: Request, options: WarmupHandl
   if (url.pathname !== '/api/hotel-review-ai/warmup') {
     return jsonResponse({ error: 'not found' }, 404);
   }
+  if (request.method === 'OPTIONS') {
+    return emptyCorsResponse(204);
+  }
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'method not allowed' }, 405);
   }
@@ -125,9 +128,26 @@ function createWarmupJobId(startedAt: string, tableId: string): string {
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
+    headers: corsHeaders({
       'Content-Type': 'application/json',
-    },
+    }),
   });
+}
+
+function emptyCorsResponse(status: number): Response {
+  return new Response(null, {
+    status,
+    headers: corsHeaders(),
+  });
+}
+
+function corsHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Private-Network': 'true',
+    'Access-Control-Max-Age': '86400',
+    ...extra,
+  };
 }

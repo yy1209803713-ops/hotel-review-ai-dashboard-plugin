@@ -20,6 +20,10 @@ export type FeishuBaseApiField = {
   type?: string | number;
 };
 
+type FeishuBaseCreateFieldResponse = FeishuBaseApiField & {
+  field?: FeishuBaseApiField;
+};
+
 export type FeishuBaseApiRecord = {
   record_id?: string;
   fields?: Record<string, unknown>;
@@ -27,6 +31,7 @@ export type FeishuBaseApiRecord = {
 
 export type FeishuBasePagedResponse<T> = {
   items?: T[];
+  records?: T[];
   has_more?: boolean;
   page_token?: string;
 };
@@ -41,6 +46,7 @@ export type FeishuBaseApi = {
     params: { viewId?: string; pageSize: number; pageToken?: unknown },
   ) => Promise<FeishuBasePagedResponse<FeishuBaseApiRecord>>;
   createTable: (name: string, fields: unknown[]) => Promise<{ table_id?: string }>;
+  createField: (tableId: string, field: unknown) => Promise<{ field_id?: string }>;
   createRecords: (
     tableId: string,
     records: Array<{ fields: Record<string, unknown> }>,
@@ -114,6 +120,17 @@ export function createFeishuBaseApi(options: FeishuBaseApiOptions): FeishuBaseAp
       return response;
     },
 
+    async createField(tableId, field) {
+      const response = await client.request<FeishuBaseCreateFieldResponse>(
+        createPath(`/tables/${encodeURIComponent(tableId)}/fields`),
+        {
+          method: 'POST',
+          body: JSON.stringify(toOpenApiField(field)),
+        },
+      );
+      return normalizeCreateFieldResponse(response);
+    },
+
     async createRecords(tableId, records) {
       return client.request<{ records?: Array<{ record_id?: string }> }>(
         createPath(`/tables/${encodeURIComponent(tableId)}/records/batch_create`),
@@ -148,6 +165,12 @@ export function createFeishuBaseApi(options: FeishuBaseApiOptions): FeishuBaseAp
   }
 }
 
+function normalizeCreateFieldResponse(response: FeishuBaseCreateFieldResponse): { field_id?: string } {
+  return {
+    field_id: response.field_id ?? response.field?.field_id,
+  };
+}
+
 function createPageParams(pageSize: number, pageToken?: unknown): URLSearchParams {
   const params = new URLSearchParams({ page_size: String(pageSize) });
   if (pageToken !== undefined) {
@@ -161,7 +184,7 @@ async function listAllPages<T>(requestPage: (pageToken?: string) => Promise<Feis
   let pageToken: string | undefined;
   do {
     const page = await requestPage(pageToken);
-    items.push(...requireArray(page.items, 'items missing from Feishu OpenAPI paged response'));
+    items.push(...requireArray(page.records ?? page.items, 'records missing from Feishu OpenAPI paged response'));
     pageToken = page.has_more ? requireString(page.page_token, 'page_token missing while has_more is true') : undefined;
   } while (pageToken);
   return items;
@@ -210,8 +233,24 @@ function toOpenApiField(field: unknown): { field_name: string; type: unknown } {
   const name = field.name ?? field.field_name;
   return {
     field_name: requireString(name, 'field name missing while creating table'),
-    type: requirePresent(field.type, `field type missing for ${String(name)}`),
+    type: normalizeBitableFieldType(requirePresent(field.type, `field type missing for ${String(name)}`)),
   };
+}
+
+function normalizeBitableFieldType(type: unknown): unknown {
+  if (typeof type !== 'string') {
+    return type;
+  }
+  switch (type) {
+    case 'text':
+      return 1;
+    case 'number':
+      return 2;
+    case 'datetime':
+      return 5;
+    default:
+      return type;
+  }
 }
 
 function requirePresent<T>(value: T | null | undefined, message: string): T {

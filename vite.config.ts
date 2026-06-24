@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: 'jsdom',
       globals: true,
-      exclude: [...configDefaults.exclude, 'smoke/**'],
+      exclude: [...configDefaults.exclude, 'smoke/**', '.worktrees/**'],
       setupFiles: './src/test/setup.ts',
     },
   };

@@ -30,6 +30,8 @@ export type UpsertConfigRequest = BackendOwnership & {
   model?: string;
   source: {
     kind: 'feishu_base' | 'postgres' | 'external';
+    sourceId?: string;
+    upstreamSourceKind?: 'feishu_base' | 'postgres' | 'external';
     tableId?: string;
     viewId?: string;
     fieldMapping: FieldMapping;

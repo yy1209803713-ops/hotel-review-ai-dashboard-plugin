@@ -2,11 +2,21 @@ import { DEFAULT_CONFIG } from '../constants/defaults';
 import type { DashboardRuntime, RuntimeConfig } from '../runtime/sdk';
 import type { AnalysisCache, PluginConfig } from '../types/config';
 import { buildDataConditions, getPrimaryDataCondition, mergeConfigWithDataCondition } from './dashboardConfig';
+import { logConfigDebug, summarizePluginConfig, summarizeRuntimeConfig } from './debugLog';
 
 export async function loadPluginConfig(runtime: DashboardRuntime): Promise<PluginConfig> {
   const config = await runtime.getConfig();
+  logConfigDebug('loadPluginConfig:runtime.getConfig', {
+    runtimeState: runtime.getState(),
+    runtimeConfig: summarizeRuntimeConfig(config),
+  });
   const pluginConfig = normalizePluginConfig(config.customConfig ?? DEFAULT_CONFIG);
-  return mergeConfigWithDataCondition(pluginConfig, getPrimaryDataCondition(config));
+  const mergedConfig = mergeConfigWithDataCondition(pluginConfig, getPrimaryDataCondition(config));
+  logConfigDebug('loadPluginConfig:normalized', {
+    runtimeState: runtime.getState(),
+    pluginConfig: summarizePluginConfig(mergedConfig),
+  });
+  return mergedConfig;
 }
 
 export async function loadAnalysisCache(runtime: DashboardRuntime): Promise<AnalysisCache | undefined> {
@@ -15,9 +25,18 @@ export async function loadAnalysisCache(runtime: DashboardRuntime): Promise<Anal
 }
 
 export async function savePluginConfig(runtime: DashboardRuntime, pluginConfig: PluginConfig): Promise<boolean> {
-  return persistRuntimeConfig(runtime, {
+  const runtimeConfig = {
     dataConditions: buildDataConditions(pluginConfig),
     customConfig: pluginConfig,
+  };
+  logConfigDebug('savePluginConfig:before', {
+    runtimeState: runtime.getState(),
+    pluginConfig: summarizePluginConfig(pluginConfig),
+    runtimeConfig: summarizeRuntimeConfig(runtimeConfig),
+  });
+  return persistRuntimeConfig(runtime, {
+    dataConditions: runtimeConfig.dataConditions,
+    customConfig: runtimeConfig.customConfig,
   });
 }
 
@@ -41,6 +60,11 @@ export async function saveAnalysisCache(runtime: DashboardRuntime, analysisCache
 
 async function persistRuntimeConfig(runtime: DashboardRuntime, config: RuntimeConfig): Promise<boolean> {
   const saved = await runtime.saveConfig(config);
+  logConfigDebug('savePluginConfig:after', {
+    runtimeState: runtime.getState(),
+    saved,
+    runtimeConfig: summarizeRuntimeConfig(config),
+  });
   if (!saved) {
     throw new Error('Dashboard saveConfig returned false');
   }

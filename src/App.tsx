@@ -5,6 +5,7 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { DashboardShell } from './components/DashboardShell';
 import { DEFAULT_CONFIG, FIELD_LABELS } from './constants/defaults';
 import { buildDataConditions } from './services/dashboardConfig';
+import { logConfigDebug, summarizeFieldMapping, summarizePluginConfig } from './services/debugLog';
 import { getPeriodRange } from './services/filtering';
 import { normalizeReviewRecord, readReviewRecords } from './services/baseRecords';
 import { getMissingRequiredFields, suggestFieldMapping } from './services/fieldMapping';
@@ -39,6 +40,60 @@ type TopicEvidencePage = {
   page: number;
 };
 
+type DisplayInitSnapshot = {
+  configWithBackend: PluginConfig;
+  analysis: AnalysisResult | null;
+  currentScopeKey: string | null;
+  currentResultId: string | null;
+};
+
+type BackendResultSnapshot = {
+  analysis: AnalysisResult;
+  resultId: string;
+};
+
+type RuntimePromiseCacheEntry<T> = {
+  promise: Promise<T>;
+};
+
+const displayInitSnapshotCache = new WeakMap<object, Map<string, RuntimePromiseCacheEntry<DisplayInitSnapshot>>>();
+
+function getRuntimeCacheKey(runtime: DashboardRuntime): object {
+  return runtime.cacheKey ?? runtime;
+}
+
+function getCachedRuntimePromise<T>(
+  cache: WeakMap<object, Map<string, { promise: Promise<T> }>>,
+  runtime: DashboardRuntime,
+  cacheKey: string,
+  factory: () => Promise<T>,
+) {
+  const runtimeCacheKey = getRuntimeCacheKey(runtime);
+  let runtimeCache = cache.get(runtimeCacheKey);
+  if (!runtimeCache) {
+    runtimeCache = new Map<string, { promise: Promise<T> }>();
+    cache.set(runtimeCacheKey, runtimeCache);
+  }
+
+  const cachedEntry = runtimeCache.get(cacheKey);
+  if (cachedEntry) {
+    return cachedEntry.promise;
+  }
+
+  const nextEntry: RuntimePromiseCacheEntry<T> = {
+    promise: Promise.resolve()
+      .then(factory)
+      .finally(() => {
+        const currentRuntimeCache = cache.get(runtimeCacheKey);
+        if (currentRuntimeCache?.get(cacheKey) === nextEntry) {
+          currentRuntimeCache.delete(cacheKey);
+        }
+      }),
+  };
+  runtimeCache.set(cacheKey, nextEntry);
+  return nextEntry.promise;
+}
+
 export default function App() {
   const runtime = defaultRuntime;
   const [state] = useState(runtime.getState());
@@ -63,8 +118,11 @@ export default function App() {
   const [currentScopeKey, setCurrentScopeKey] = useState<string | null>(null);
   const [currentResultId, setCurrentResultId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const hostDataGenerationRef = useRef(0);
   const evidenceRequestId = useRef(0);
   const configSourceRequestId = useRef(0);
+  const initRequestRef = useRef(0);
+  const renderedRequestRef = useRef(0);
   const configRef = useRef(config);
   const mountedRef = useRef(true);
 
@@ -101,6 +159,7 @@ export default function App() {
       if (!mountedRef.current) {
         return;
       }
+      hostDataGenerationRef.current += 1;
       setHostData(data);
       setCurrentScopeKey(null);
       setCurrentResultId(null);
@@ -127,6 +186,17 @@ export default function App() {
   }, [runtime, state]);
 
   useEffect(() => {
+    const initRequestId = initRequestRef.current + 1;
+    initRequestRef.current = initRequestId;
+    const isCurrentInitRequest = () => mountedRef.current && initRequestRef.current === initRequestId;
+    const markRenderedOnce = () => {
+      if (!isCurrentInitRequest() || renderedRequestRef.current === initRequestId) {
+        return;
+      }
+      renderedRequestRef.current = initRequestId;
+      runtime.setRendered();
+    };
+
     async function init() {
       setLoading(true);
       setError(null);
@@ -147,7 +217,7 @@ export default function App() {
 
       try {
         if (state === 'View' || state === 'FullScreen') {
-          await initializeDisplayState();
+          await initializeDisplayState(initRequestId, markRenderedOnce);
           return;
         }
 
@@ -164,13 +234,13 @@ export default function App() {
 
         await initializeConfigState();
       } catch (cause) {
-        if (mountedRef.current) {
+        if (isCurrentInitRequest()) {
           setError(formatBackendAnalysisError(cause));
         }
       } finally {
-        if (mountedRef.current) {
+        if (isCurrentInitRequest()) {
           setLoading(false);
-          runtime.setRendered();
+          markRenderedOnce();
         }
       }
     }
@@ -212,18 +282,101 @@ export default function App() {
       await loadSourceMetadata(pluginConfig, requestId, true);
     }
 
-    async function initializeDisplayState() {
+    async function initializeDisplayState(initRequestId: number, markRenderedOnce: () => void) {
       const pluginConfig = await loadPluginConfig(runtime);
-      if (!mountedRef.current) {
+      logConfigDebug('displayInit:loadedConfig', {
+        state,
+        reloadToken,
+        pluginConfig: summarizePluginConfig(pluginConfig),
+      });
+      if (!isCurrentInitRequest()) {
         return;
       }
+      configRef.current = pluginConfig;
       setConfig(pluginConfig);
       setFilters(withComputedRange(pluginConfig.filters));
-      const hostDataSnapshot = await runtime.getData();
-      setHostData(hostDataSnapshot);
-      await restoreBackendAnalysis(pluginConfig);
-      if (pluginConfig.source.tableId.trim()) {
-        await loadFilterOptionRecords(pluginConfig);
+
+      let displayConfig = pluginConfig;
+      try {
+        const displayInitSnapshot = await getDisplayInitSnapshot(runtime, state, reloadToken, pluginConfig);
+        if (!isCurrentInitRequest()) {
+          return;
+        }
+        displayConfig = displayInitSnapshot.configWithBackend;
+        configRef.current = displayConfig;
+        setConfig(displayConfig);
+        setFilters(withComputedRange(displayConfig.filters));
+        setCurrentScopeKey(displayInitSnapshot.currentScopeKey);
+        setCurrentResultId(displayInitSnapshot.currentResultId);
+        setAnalysis(displayInitSnapshot.analysis);
+      } catch (cause) {
+        if (!isCurrentInitRequest()) {
+          return;
+        }
+        setError(formatBackendAnalysisError(cause));
+      }
+
+      const sourceRequestId = configSourceRequestId.current + 1;
+      configSourceRequestId.current = sourceRequestId;
+      setLoading(false);
+      markRenderedOnce();
+      void loadDisplayHostDataInBackground(initRequestId, sourceRequestId);
+      void loadDisplayOptionRecordsInBackground(displayConfig, initRequestId, sourceRequestId);
+    }
+
+    async function loadDisplayHostDataInBackground(initRequestId: number, sourceRequestId: number) {
+      const hostDataGeneration = hostDataGenerationRef.current;
+      try {
+        const hostDataSnapshot = await runtime.getData();
+        if (
+          !isFreshDisplayHostDataRequest(
+            initRequestRef.current,
+            initRequestId,
+            configSourceRequestId.current,
+            sourceRequestId,
+            hostDataGenerationRef.current,
+            hostDataGeneration,
+            mountedRef.current,
+          )
+        ) {
+          return;
+        }
+        setHostData(hostDataSnapshot);
+      } catch (cause) {
+        if (
+          isFreshDisplayHostDataRequest(
+            initRequestRef.current,
+            initRequestId,
+            configSourceRequestId.current,
+            sourceRequestId,
+            hostDataGenerationRef.current,
+            hostDataGeneration,
+            mountedRef.current,
+          )
+        ) {
+          setError(formatBackendAnalysisError(cause));
+        }
+        return;
+      }
+    }
+
+    async function loadDisplayOptionRecordsInBackground(pluginConfig: PluginConfig, initRequestId: number, sourceRequestId: number) {
+      try {
+        if (!pluginConfig.source.tableId.trim() || !hasFilterOptionRequiredFields(pluginConfig.source.fields)) {
+          if (isCurrentInitRequest() && initRequestRef.current === initRequestId && isCurrentConfigSourceRequest(sourceRequestId)) {
+            setOptionRecords([]);
+          }
+          return;
+        }
+        const optionRecordsSnapshot = await readRecordsForConfig(runtime, pluginConfig);
+        if (!isCurrentInitRequest() || initRequestRef.current !== initRequestId || !isCurrentConfigSourceRequest(sourceRequestId)) {
+          return;
+        }
+        setOptionRecords(optionRecordsSnapshot);
+      } catch (cause) {
+        if (isCurrentInitRequest() && initRequestRef.current === initRequestId && isCurrentConfigSourceRequest(sourceRequestId)) {
+          setError(formatBackendAnalysisError(cause));
+        }
       }
     }
 
@@ -274,7 +427,23 @@ export default function App() {
     [filters.checkInMonth, optionRecords],
   );
 
-  async function restoreBackendAnalysis(pluginConfig: PluginConfig) {
+  async function getDisplayInitSnapshot(
+    runtime: DashboardRuntime,
+    currentState: string,
+    currentReloadToken: number,
+    pluginConfig: PluginConfig,
+  ) {
+    const cacheKey = `${currentState}:${currentReloadToken}`;
+    return getCachedRuntimePromise(displayInitSnapshotCache, runtime, cacheKey, async () => {
+      const backendSnapshot = await restoreBackendAnalysis(pluginConfig);
+      return {
+        pluginConfig,
+        ...backendSnapshot,
+      };
+    });
+  }
+
+  async function restoreBackendAnalysis(pluginConfig: PluginConfig): Promise<DisplayInitSnapshot> {
     const backendValidationMessage = getBackendValidationMessage(pluginConfig);
     if (backendValidationMessage) {
       throw new BackendAnalysisError('validate_request', backendValidationMessage);
@@ -285,34 +454,49 @@ export default function App() {
     const upserted = await upsertBackendAnalysisConfig(client, ownership, pluginConfig);
     const configWithBackend = withBackendConfigId(pluginConfig, upserted);
     configRef.current = configWithBackend;
-    setConfig(configWithBackend);
     if (shouldPersistBackendConfigMetadata(pluginConfig, upserted)) {
       await savePluginConfig(runtime, configWithBackend);
     }
 
     const scope = await client.resolveScope({ ...ownership, configId: upserted.configId });
-    setCurrentScopeKey(scope.scopeKey);
     const currentJob = await client.getCurrentJob({ ...ownership, scopeKey: scope.scopeKey });
     if (currentJob && !COMPLETE_JOB_STATUSES.has(currentJob.status)) {
-      setAnalysisRunning(true);
-      let completedJob: BackendAnalysisJob;
-      try {
-        completedJob = await waitForBackendJob(client, ownership, currentJob, () => mountedRef.current);
-      } finally {
-        setAnalysisRunning(false);
+      const latestSnapshot = await loadLatestBackendResult(client, ownership, currentJob.scopeKey, undefined, true);
+      if (latestSnapshot) {
+        return {
+          configWithBackend,
+          currentScopeKey: currentJob.scopeKey,
+          currentResultId: latestSnapshot.resultId,
+          analysis: latestSnapshot.analysis,
+        };
       }
+      let completedJob: BackendAnalysisJob;
+      completedJob = await waitForBackendJob(client, ownership, currentJob, () => mountedRef.current);
       if (completedJob.status !== 'success' || !completedJob.resultId) {
         throw new BackendAnalysisError(
           completedJob.errorStage ?? completedJob.stage ?? 'load_config',
           completedJob.errorMessage ?? '后端分析任务未成功完成',
         );
       }
-      await loadLatestBackendResult(client, ownership, completedJob.scopeKey, completedJob.resultId);
-      return;
+      const completedSnapshot = await loadLatestBackendResult(client, ownership, completedJob.scopeKey, completedJob.resultId);
+      return {
+        configWithBackend,
+        currentScopeKey: completedJob.scopeKey,
+        currentResultId: completedJob.resultId,
+        analysis: completedSnapshot?.analysis ?? null,
+      };
     }
     if (currentJob?.status === 'success') {
-      await loadLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
-      return;
+      if (!currentJob.resultId) {
+        throw new BackendAnalysisError('validate_response', '后端成功任务缺少 resultId');
+      }
+      const currentSnapshot = await loadLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
+      return {
+        configWithBackend,
+        currentScopeKey: currentJob.scopeKey,
+        currentResultId: currentJob.resultId,
+        analysis: currentSnapshot?.analysis ?? null,
+      };
     }
     if (currentJob?.status === 'failed' || currentJob?.status === 'canceled') {
       throw new BackendAnalysisError(
@@ -321,14 +505,30 @@ export default function App() {
       );
     }
 
-    await loadLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
+    const latestSnapshot = await loadLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
+    return {
+      configWithBackend,
+      currentScopeKey: scope.scopeKey,
+      currentResultId: latestSnapshot?.resultId ?? null,
+      analysis: latestSnapshot?.analysis ?? null,
+    };
   }
 
   async function handleUpdateAnalysis() {
     setError(null);
     setScopeWarning(null);
+    logConfigDebug('handleUpdateAnalysis:beforeValidation', {
+      state,
+      config: summarizePluginConfig(config),
+      fields: summarizeFieldMapping(config.source.fields),
+    });
     const missingFieldMessage = getMissingFieldMappingMessage(config.source.fields);
     if (missingFieldMessage) {
+      logConfigDebug('handleUpdateAnalysis:missingFields', {
+        state,
+        message: missingFieldMessage,
+        fields: summarizeFieldMapping(config.source.fields),
+      });
       setError(missingFieldMessage);
       Toast.error(missingFieldMessage);
       return;
@@ -349,7 +549,7 @@ export default function App() {
       JSON.stringify({
         filters,
         backendEndpointUrl: config.backend.endpointUrl,
-        baseToken: config.backend.baseToken,
+        hasBaseToken: Boolean(config.backend.baseToken.trim()),
         tableId: config.source.tableId,
         viewId: config.source.viewId,
       }),
@@ -432,7 +632,7 @@ export default function App() {
     scopeKey: string,
     expectedResultId?: string,
     ignoreNotFound = false,
-  ) {
+  ): Promise<BackendResultSnapshot | null> {
     try {
       const latest = await client.getLatestResult({ ...ownership, scopeKey });
       if (expectedResultId && latest.resultId !== expectedResultId) {
@@ -456,9 +656,13 @@ export default function App() {
       setSelectedTopic(null);
       setEvidenceRecords([]);
       setEvidencePage(1);
+      return {
+        analysis: result,
+        resultId: latest.resultId,
+      };
     } catch (cause) {
       if (ignoreNotFound && cause instanceof BackendAnalysisError && cause.status === 404) {
-        return;
+        return null;
       }
       throw cause;
     }
@@ -525,8 +729,19 @@ export default function App() {
 
   async function handleSaveConfig() {
     setError(null);
+    logConfigDebug('handleSaveConfig:clicked', {
+      state,
+      config: summarizePluginConfig(config),
+      fields: summarizeFieldMapping(config.source.fields),
+    });
     const saveValidationMessage = getSaveValidationMessage(config);
     if (saveValidationMessage) {
+      logConfigDebug('handleSaveConfig:validationBlocked', {
+        state,
+        message: saveValidationMessage,
+        config: summarizePluginConfig(config),
+        fields: summarizeFieldMapping(config.source.fields),
+      });
       setError(saveValidationMessage);
       Toast.error(saveValidationMessage);
       return;
@@ -535,15 +750,37 @@ export default function App() {
     setSaving(true);
     const configToSave = { ...config, filters };
     const sourceRequestId = configSourceRequestId.current;
+    logConfigDebug('handleSaveConfig:beforeSave', {
+      state,
+      sourceRequestId,
+      config: summarizePluginConfig(configToSave),
+      fields: summarizeFieldMapping(configToSave.source.fields),
+    });
     try {
       await savePluginConfig(runtime, configToSave);
+      logConfigDebug('handleSaveConfig:afterDashboardSaveBeforeBackend', {
+        state,
+        sourceRequestId,
+        config: summarizePluginConfig(configToSave),
+      });
       const ownership = await getBackendOwnership(runtime);
       const client = createBackendAnalysisClient({ endpointUrl: configToSave.backend.endpointUrl });
       const upserted = await upsertBackendAnalysisConfig(client, ownership, configToSave);
       const configWithBackend = withBackendConfigId(configToSave, upserted);
+      logConfigDebug('handleSaveConfig:afterBackendUpsert', {
+        state,
+        sourceRequestId,
+        upserted,
+        config: summarizePluginConfig(configWithBackend),
+      });
       configRef.current = configWithBackend;
       setConfig(configWithBackend);
       await savePluginConfig(runtime, configWithBackend);
+      logConfigDebug('handleSaveConfig:afterBackendConfigSave', {
+        state,
+        sourceRequestId,
+        config: summarizePluginConfig(configWithBackend),
+      });
       await loadFilterOptionRecords(configWithBackend, sourceRequestId);
       Toast.success('配置已保存');
     } catch (cause) {
@@ -773,7 +1010,9 @@ async function upsertBackendAnalysisConfig(
     baseToken: pluginConfig.backend.baseToken.trim(),
     model: pluginConfig.ai.model.trim(),
     source: {
-      kind: 'feishu_base',
+      kind: 'postgres',
+      sourceId: buildBackendSourceId(pluginConfig),
+      upstreamSourceKind: 'feishu_base',
       tableId: pluginConfig.source.tableId.trim(),
       viewId: pluginConfig.source.viewId?.trim() || undefined,
       fieldMapping: pluginConfig.source.fields,
@@ -781,6 +1020,14 @@ async function upsertBackendAnalysisConfig(
     filters: withComputedRange(pluginConfig.filters),
     dashboardDataConditions: buildDataConditions(pluginConfig),
   });
+}
+
+function buildBackendSourceId(pluginConfig: PluginConfig): string {
+  return [
+    pluginConfig.backend.baseToken.trim(),
+    pluginConfig.source.tableId.trim(),
+    pluginConfig.source.viewId?.trim(),
+  ].filter(Boolean).join(':');
 }
 
 function withBackendConfigId(
@@ -973,4 +1220,21 @@ function isSameFieldMapping(left: FieldMapping, right: FieldMapping): boolean {
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {
   return FILTER_OPTION_REQUIRED_FIELD_KEYS.every((key) => fields[key]?.trim());
+}
+
+export function isFreshDisplayHostDataRequest(
+  currentInitRequestId: number,
+  activeInitRequestId: number,
+  currentSourceRequestId: number,
+  activeSourceRequestId: number,
+  currentHostDataGeneration: number,
+  capturedHostDataGeneration: number,
+  isMounted: boolean,
+) {
+  return (
+    isMounted &&
+    currentInitRequestId === activeInitRequestId &&
+    currentSourceRequestId === activeSourceRequestId &&
+    currentHostDataGeneration === capturedHostDataGeneration
+  );
 }
