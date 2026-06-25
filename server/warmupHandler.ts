@@ -1,11 +1,17 @@
 import type { WarmupMode, WarmupRequest, WarmupResponse, WarmupSource, WarmupStage } from './warmupTypes';
+import { BackendAnalysisError } from './backendAnalysis';
+import { createWarmupAcceptedResponse, type WarmupService } from './warmupJob';
+import { isReviewDateRangeBoundaryString } from '../src/services/filtering';
 
 export type WarmupHandlerOptions = {
   warmupSecret: string;
+  service?: WarmupService;
+  onWarmupJobCreated?: (jobId: string) => void;
   now?: () => string;
 };
 
 const EMPTY_SUMMARY: WarmupResponse['summary'] = {
+  recordsScanned: 0,
   totalReviews: 0,
   evidenceCacheHits: 0,
   evidenceCacheMisses: 0,
@@ -46,18 +52,24 @@ export async function handleWarmupRequest(request: Request, options: WarmupHandl
     return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, validationMessage), 400);
   }
 
-  logWarmupTrigger(payload, jobId, mode);
+  if (!options.service) {
+    return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, 'warmup service is not configured'), 500);
+  }
 
-  return jsonResponse(
-    {
-      jobId,
-      status: 'accepted',
-      mode,
-      summary: { ...EMPTY_SUMMARY },
-      errors: [],
-    } satisfies WarmupResponse,
-    202,
-  );
+  try {
+    const job = await options.service.createWarmupJob({
+      request: payload,
+      triggerType: triggerTypeFromSource(payload.source),
+    });
+    options.onWarmupJobCreated?.(job.jobId);
+    logWarmupTrigger(payload, job.jobId, mode);
+    return jsonResponse(createWarmupAcceptedResponse(job), 202);
+  } catch (cause) {
+    if (cause instanceof BackendAnalysisError) {
+      return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, cause.message, cause.stage as WarmupStage), cause.status);
+    }
+    throw cause;
+  }
 }
 
 function isAuthorized(request: Request, warmupSecret: string): boolean {
@@ -79,6 +91,15 @@ function validateWarmupPayload(payload: WarmupRequest): string {
   if (!payload.tableId?.trim()) {
     errors.push('tableId is required');
   }
+  if (!payload.baseToken?.trim()) {
+    errors.push('baseToken is required');
+  }
+  if (payload.startDate && !isDateString(payload.startDate)) {
+    errors.push('startDate must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss');
+  }
+  if (payload.endDate && !isDateString(payload.endDate)) {
+    errors.push('endDate must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss');
+  }
   return errors.join('; ');
 }
 
@@ -88,6 +109,20 @@ function isWarmupMode(mode: unknown): mode is WarmupMode {
 
 function isWarmupSource(source: unknown): source is WarmupSource {
   return source === 'dashboard-button' || source === 'feishu-workflow' || source === 'manual';
+}
+
+function isDateString(value: string): boolean {
+  return isReviewDateRangeBoundaryString(value);
+}
+
+function triggerTypeFromSource(source: WarmupSource) {
+  if (source === 'feishu-workflow') {
+    return 'feishu_workflow';
+  }
+  if (source === 'dashboard-button') {
+    return 'dashboard_button';
+  }
+  return 'manual_api';
 }
 
 function createFailureResponse(
@@ -116,6 +151,8 @@ function logWarmupTrigger(request: WarmupRequest, jobId: string, mode: WarmupMod
       baseToken: request.baseToken,
       tableId: request.tableId,
       viewId: request.viewId,
+      startDate: request.startDate,
+      endDate: request.endDate,
       dryRun: Boolean(request.dryRun),
     }),
   );

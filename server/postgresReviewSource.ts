@@ -6,6 +6,7 @@ import {
 import type { ReviewSyncStore } from './postgresReviewSyncStore';
 import { GLOBAL_REVIEW_SOURCE_TENANT_KEY, type ReviewSyncSourceKey } from './reviewSync';
 import type { ReviewRecord, ReviewSource, ReviewSourceQuery } from './reviewSource';
+import { formatReviewDateRangeBoundary, isReviewDateRangeBoundaryString } from '../src/services/filtering';
 
 export type PostgresReviewSourceOptions = {
   store: ReviewSyncStore;
@@ -18,7 +19,9 @@ export class PostgresReviewSource implements ReviewSource {
 
   async listReviews(query: ReviewSourceQuery): Promise<ReviewRecord[]> {
     const sourceKey = toReadModelSourceKey(query);
-    const records = await this.options.store.listReviewRecords(sourceKey);
+    const records = await this.options.store.listReviewRecords(sourceKey, {
+      reviewDateRange: readReviewDateRange(query.filters),
+    });
     return records.map((record) => ({
       recordId: record.recordId,
       fields: structuredClone(record.fields),
@@ -39,6 +42,31 @@ export class PostgresReviewSource implements ReviewSource {
       kind: 'postgres',
     };
   }
+}
+
+function readReviewDateRange(filters: ReviewSourceQuery['filters']): { startDate?: string; endDate?: string } | undefined {
+  if (!isRecord(filters)) {
+    return undefined;
+  }
+  const startDate = pickReviewDateBoundary(filters.startDate, 'startDate', 'start');
+  const endDate = pickReviewDateBoundary(filters.endDate, 'endDate', 'end');
+  if (!startDate && !endDate) {
+    return undefined;
+  }
+  return {
+    startDate,
+    endDate,
+  };
+}
+
+function pickReviewDateBoundary(value: unknown, fieldName: string, boundary: 'start' | 'end'): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !isReviewDateRangeBoundaryString(value)) {
+    throw new BackendAnalysisError(400, 'resolve_source', `${fieldName} must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss`);
+  }
+  return formatReviewDateRangeBoundary(value, boundary);
 }
 
 function toReadModelSourceKey(query: ReviewSourceQuery): ReviewSyncSourceKey {
@@ -96,4 +124,8 @@ function pickNonEmptyString(value: unknown): string | undefined {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

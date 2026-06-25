@@ -33,18 +33,26 @@ export type WarmupRequest = {
   baseToken?: string;
   tableId: string;
   viewId?: string;
+  fieldMapping?: Record<string, string>;
+  startDate?: string;
+  endDate?: string;
   configId?: string;
   dryRun?: boolean;
 };
 
 export type WarmupSummary = {
+  recordsScanned?: number;
   totalReviews: number;
   evidenceCacheHits: number;
   evidenceCacheMisses: number;
   evidenceRecordsSaved: number;
+  evidenceCacheInserts?: number;
+  evidenceCacheUpdates?: number;
   topicMappingHits: number;
   topicMappingMisses: number;
   topicMappingsSaved: number;
+  topicMappingCacheInserts?: number;
+  topicMappingCacheUpdates?: number;
 };
 
 export type WarmupError = {
@@ -135,6 +143,7 @@ export type WarmupAnalysisCacheParams = {
 };
 
 const EMPTY_SUMMARY: WarmupSummary = {
+  recordsScanned: 0,
   totalReviews: 0,
   evidenceCacheHits: 0,
   evidenceCacheMisses: 0,
@@ -186,6 +195,7 @@ export async function warmupAnalysisCache(params: WarmupAnalysisCacheParams): Pr
   try {
     const summary: WarmupSummary = { ...EMPTY_SUMMARY };
     const records = await runStage('read_reviews', () => params.readReviews());
+    summary.recordsScanned = records.length;
     summary.totalReviews = records.length;
 
     const evidenceCache = await runStage('read_evidence_cache', () =>

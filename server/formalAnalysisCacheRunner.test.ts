@@ -423,6 +423,85 @@ describe('createFormalAnalysisCacheRunner', () => {
     });
   });
 
+  it('includes cache write insert and update diagnostics returned by the repository', async () => {
+    const cacheRepository = createStaticAnalysisCacheRepository({
+      readEvidenceCache: vi.fn(async ({ records }) => ({
+        tableId: 'cache-evidence',
+        hits: [],
+        misses: records,
+        diagnostics: emptyDiagnostics(),
+      })),
+      readTopicMappingCache: vi.fn(async ({ candidates }) => ({
+        tableId: 'cache-topic',
+        hits: [],
+        misses: candidates,
+        diagnostics: emptyTopicDiagnostics(),
+      })),
+    });
+    cacheRepository.saveEvidenceCacheEntries = vi.fn(async () => ({ inserts: 1, updates: 2 }));
+    cacheRepository.saveTopicMappingCacheEntries = vi.fn(async () => ({ inserts: 3, updates: 4 }));
+    const runner = createFormalAnalysisCacheRunner({
+      env: {
+        AI_BASE_URL: 'https://api.example.com/v1',
+        AI_API_KEY: 'sk-test',
+        AI_MODEL: 'qwen-plus',
+      },
+      analyzeBatchImpl: vi.fn(async ({ records }) => ({
+        evidenceItems: records.map((record) => ({
+          recordId: record.recordId,
+          quote: '位置很好',
+          sentiment: 'positive' as const,
+          aspectLabel: '位置',
+        })),
+      })),
+      mergeTopicsImpl: vi.fn(async ({ candidates }) => ({
+        groups: candidates.map((candidate) => ({
+          mergeKey: '位置便利',
+          category: '位置',
+          displayTopic: '位置方便',
+          summary: '位置相关评论证据。',
+          sentiment: candidate.sentiment,
+          members: [{
+            candidateId: candidate.id,
+            sourceLabel: candidate.sourceLabel,
+            acceptedQuotes: candidate.quotes,
+          }],
+        })),
+      })),
+      cacheRepository,
+    });
+
+    const result = await runner.run({
+      reviews: [review('rec-a', '位置很好，出行方便。')],
+      query: {
+        tenantKey: 'tenant-a',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        sourceConfig: {
+          sourceId: 'base-a:tbl-review',
+          upstreamSourceKind: 'feishu_base',
+        },
+        fieldMapping: {},
+        filters: baseFilters({ hotelName: 'all' }),
+      },
+      jobId: 'job-write-diagnostics',
+      pipelineVersion: 'backend-owned-v1',
+    });
+
+    expect(result.summary).toMatchObject({
+      cacheWriteDiagnostics: {
+        evidenceCache: {
+          inserts: 1,
+          updates: 2,
+        },
+        topicMappingCache: {
+          inserts: 3,
+          updates: 4,
+        },
+      },
+    });
+  });
+
   it('saves diagnostics only for records that still fail after single-record retry', async () => {
     const saveEvidenceBatchDiagnostic = vi.fn(async () => undefined);
     const analyzeBatchImpl = vi.fn(async ({ records }) => {
@@ -614,14 +693,14 @@ function createStaticAnalysisCacheRepository(overrides: {
       misses: records,
       diagnostics: emptyDiagnostics(),
     })),
-    saveEvidenceCacheEntries: vi.fn(async () => undefined),
+    saveEvidenceCacheEntries: vi.fn(async () => ({ inserts: 0, updates: 0 })),
     readTopicMappingCache: overrides.readTopicMappingCache ?? vi.fn(async ({ candidates }) => ({
       tableId: 'cache-topic',
       hits: [],
       misses: candidates,
       diagnostics: emptyTopicDiagnostics(),
     })),
-    saveTopicMappingCacheEntries: vi.fn(async () => undefined),
+    saveTopicMappingCacheEntries: vi.fn(async () => ({ inserts: 0, updates: 0 })),
   };
 }
 
@@ -649,10 +728,18 @@ function createMemoryAnalysisCacheRepository(): AnalysisCacheRepository {
       };
     }),
     saveEvidenceCacheEntries: vi.fn(async (params) => {
+      const result = { inserts: 0, updates: 0 };
       const evidenceByRecord = groupEvidence(params.evidenceItems);
       for (const record of params.records) {
-        evidenceByKey.set(evidenceKey(params, record), evidenceByRecord.get(record.recordId) ?? []);
+        const key = evidenceKey(params, record);
+        if (evidenceByKey.has(key)) {
+          result.updates += 1;
+        } else {
+          result.inserts += 1;
+        }
+        evidenceByKey.set(key, evidenceByRecord.get(record.recordId) ?? []);
       }
+      return result;
     }),
     readTopicMappingCache: vi.fn(async (params): Promise<AnalysisTopicMappingCacheReadResult> => {
       const hits = params.candidates.flatMap((candidate) => {
@@ -668,9 +755,17 @@ function createMemoryAnalysisCacheRepository(): AnalysisCacheRepository {
       };
     }),
     saveTopicMappingCacheEntries: vi.fn(async (params) => {
+      const result = { inserts: 0, updates: 0 };
       for (const [key, mapping] of buildMappingsFromGroups(params.candidates, params.groups)) {
-        mappingsByKey.set(`${params.tenantKey}:${params.sourceKind}:${params.sourceId}:${params.model}:${key}`, mapping);
+        const mappingCacheKey = `${params.tenantKey}:${params.sourceKind}:${params.sourceId}:${params.model}:${key}`;
+        if (mappingsByKey.has(mappingCacheKey)) {
+          result.updates += 1;
+        } else {
+          result.inserts += 1;
+        }
+        mappingsByKey.set(mappingCacheKey, mapping);
       }
+      return result;
     }),
   };
   return repository;

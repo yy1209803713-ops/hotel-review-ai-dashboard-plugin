@@ -121,4 +121,23 @@ describe('filterReviews', () => {
 
     expect(filtered.map((record) => record.recordId)).toEqual(['rec1']);
   });
+
+  it('uses second-precision custom date-time boundaries when provided', () => {
+    const timedRecords: ReviewRecord[] = [
+      { ...records[0], recordId: 'before', reviewDate: '2026-05-01 09:59:59' },
+      { ...records[0], recordId: 'start', reviewDate: '2026-05-01 10:00:00' },
+      { ...records[0], recordId: 'middle', reviewDate: '2026-05-01 10:30:00' },
+      { ...records[0], recordId: 'end', reviewDate: '2026-05-01 11:00:00' },
+      { ...records[0], recordId: 'after', reviewDate: '2026-05-01 11:00:01' },
+    ];
+
+    const filtered = filterReviews(timedRecords, {
+      ...baseFilters,
+      periodType: 'custom',
+      startDate: '2026-05-01 10:00:00',
+      endDate: '2026-05-01 11:00:00',
+    });
+
+    expect(filtered.map((record) => record.recordId)).toEqual(['start', 'middle', 'end']);
+  });
 });

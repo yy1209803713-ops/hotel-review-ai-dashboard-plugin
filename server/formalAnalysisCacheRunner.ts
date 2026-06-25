@@ -84,6 +84,7 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
         }),
       );
       let topicMappingCacheUsage: TopicMappingCacheUsageAggregate | undefined;
+      const cacheWriteDiagnostics = emptyCacheWriteDiagnostics();
       const result = await runAnalysis({
         records: pipelineRecords,
         config,
@@ -140,31 +141,36 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           if (!usage.analyzedRecords.length || !filteredReviews.length) {
             return;
           }
-          await cacheRepository.saveEvidenceCacheEntries({
+          const writeResult = await cacheRepository.saveEvidenceCacheEntries({
             ...cacheIdentity,
             model: config.model,
             records: usage.analyzedRecords,
             evidenceItems: usage.newEvidenceItems,
             now,
           });
+          cacheWriteDiagnostics.evidenceCache.inserts += writeResult.inserts;
+          cacheWriteDiagnostics.evidenceCache.updates += writeResult.updates;
         },
         onTopicMappingUsage: async (usage) => {
           if (!usage.newCandidates.length || !usage.newGroups.length) {
             return;
           }
-          await cacheRepository.saveTopicMappingCacheEntries({
+          const writeResult = await cacheRepository.saveTopicMappingCacheEntries({
             ...cacheIdentity,
             model: config.model,
             candidates: usage.newCandidates,
             groups: usage.newGroups,
             now,
           });
+          cacheWriteDiagnostics.topicMappingCache.inserts += writeResult.inserts;
+          cacheWriteDiagnostics.topicMappingCache.updates += writeResult.updates;
         },
       });
       const cacheDiagnostics = buildFormalCacheDiagnostics(evidenceCache, topicMappingCacheUsage);
       const summaryWithDiagnostics = {
         ...(result as unknown as Record<string, unknown>),
         cacheDiagnostics,
+        cacheWriteDiagnostics,
       };
 
       return {
@@ -181,6 +187,30 @@ type TopicMappingCacheUsageAggregate = {
   hits: number;
   misses: number;
 };
+
+type FormalCacheWriteDiagnostics = {
+  evidenceCache: {
+    inserts: number;
+    updates: number;
+  };
+  topicMappingCache: {
+    inserts: number;
+    updates: number;
+  };
+};
+
+function emptyCacheWriteDiagnostics(): FormalCacheWriteDiagnostics {
+  return {
+    evidenceCache: {
+      inserts: 0,
+      updates: 0,
+    },
+    topicMappingCache: {
+      inserts: 0,
+      updates: 0,
+    },
+  };
+}
 
 function mergeTopicMappingCacheUsage(
   current: TopicMappingCacheUsageAggregate | undefined,

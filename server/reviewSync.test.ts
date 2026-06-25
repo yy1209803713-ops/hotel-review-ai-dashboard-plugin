@@ -151,6 +151,71 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
   });
 
+  it('lists only active read-model records inside the requested reviewDate range', async () => {
+    const store = createInMemoryReviewSyncStore();
+    await store.upsertReviewRecords({
+      sourceKey,
+      reviews: [
+        review('rec-before', 'Too early', 4, 'rec-before-hash', '2026-05-01 09:59:59'),
+        review('rec-start', 'At start', 5, 'rec-start-hash', '2026-05-01 10:00:00'),
+        review('rec-middle', 'Inside range', 5, 'rec-middle-hash', '2026-05-01 10:30:00'),
+        review('rec-end', 'At end', 5, 'rec-end-hash', '2026-05-01 11:00:00'),
+        review('rec-after', 'Too late', 4, 'rec-after-hash', '2026-05-01 11:00:01'),
+      ],
+      syncedAt: '2026-06-23T08:00:00.000Z',
+    });
+    await store.softDeleteReviewRecord({
+      sourceKey,
+      recordId: 'rec-middle',
+      syncedAt: '2026-06-23T08:01:00.000Z',
+    });
+
+    await expect(
+      store.listReviewRecords(sourceKey, {
+        reviewDateRange: {
+          startDate: '2026-05-01 10:00:00',
+          endDate: '2026-05-01 11:00:00',
+        },
+      }),
+    ).resolves.toMatchObject([
+      { recordId: 'rec-end' },
+      { recordId: 'rec-start' },
+    ]);
+  });
+
+  it('passes custom reviewDate range from PostgresReviewSource queries into the read model', async () => {
+    const store = createInMemoryReviewSyncStore();
+    await store.upsertReviewRecords({
+      sourceKey,
+      reviews: [
+        review('rec-before', 'Too early', 4, 'rec-before-hash', '2026-05-01 09:59:59'),
+        review('rec-start', 'At start', 5, 'rec-start-hash', '2026-05-01 10:00:00'),
+        review('rec-end', 'At end', 5, 'rec-end-hash', '2026-05-01 11:00:00'),
+        review('rec-after', 'Too late', 4, 'rec-after-hash', '2026-05-01 11:00:01'),
+      ],
+      syncedAt: '2026-06-23T08:00:00.000Z',
+    });
+    const postgresSource = new PostgresReviewSource({ store });
+
+    await expect(
+      postgresSource.listReviews({
+        ...toQuery(sourceKey),
+        sourceConfig: {
+          sourceId: sourceKey.sourceId,
+          upstreamSourceKind: sourceKey.sourceKind,
+        },
+        filters: {
+          periodType: 'custom',
+          startDate: '2026-05-01 10:00:00',
+          endDate: '2026-05-01 11:00:00',
+        },
+      }),
+    ).resolves.toMatchObject([
+      { recordId: 'rec-end' },
+      { recordId: 'rec-start' },
+    ]);
+  });
+
   it('enqueues full and incremental sync from HTTP receivers using global tenant and canonical source id', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({
@@ -218,6 +283,76 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
     expect(incrementalResponse.status).toBe(202);
     expect(enqueued[1]).toEqual({ jobId: 'sync-job-2', sourceKey });
+  });
+
+  it('passes explicit warmup options from sync receivers without enabling warmup by default', async () => {
+    const syncServiceWithoutWarmup = new ReviewSyncService({
+      store: createInMemoryReviewSyncStore(),
+      sourceReaders: { feishu_base: new MutableReviewSource([review('rec-1', 'Great view', 5)]) },
+      now: createClock(['2026-06-23T08:00:00.000Z']),
+    });
+    const enqueuedWarmups: unknown[] = [];
+
+    const withoutWarmup = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          fieldMapping: sourceKey.fieldMapping,
+        }),
+      }),
+      {
+        service: syncServiceWithoutWarmup,
+        onWarmupRequested: (request) => enqueuedWarmups.push(request),
+      },
+    );
+    expect(withoutWarmup.status).toBe(202);
+    expect(enqueuedWarmups).toEqual([]);
+
+    const syncServiceWithWarmup = new ReviewSyncService({
+      store: createInMemoryReviewSyncStore(),
+      sourceReaders: { feishu_base: new MutableReviewSource([review('rec-1', 'Great view', 5)]) },
+      now: createClock(['2026-06-23T08:01:00.000Z']),
+    });
+
+    const withWarmup = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          fieldMapping: sourceKey.fieldMapping,
+          warmup: {
+            enabled: true,
+            mode: 'incremental',
+            startDate: '2026-06-01',
+            endDate: '2026-06-30',
+          },
+        }),
+      }),
+      {
+        service: syncServiceWithWarmup,
+        onWarmupRequested: (request) => enqueuedWarmups.push(request),
+      },
+    );
+
+    await expect(withWarmup.json()).resolves.toMatchObject({
+      jobId: 'sync-job-1',
+      status: 'queued',
+    });
+    expect(enqueuedWarmups).toEqual([
+      {
+        syncJobId: 'sync-job-1',
+        sourceKey,
+        warmup: {
+          enabled: true,
+          mode: 'incremental',
+          startDate: '2026-06-01',
+          endDate: '2026-06-30',
+        },
+      },
+    ]);
   });
 
   it('removes Feishu record-changed HTTP receiver so events no longer enqueue sync jobs', async () => {
@@ -514,7 +649,12 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
       reviews: [review('rec-1', 'Great view', 5)],
       syncedAt: '2026-06-23T08:00:00.000Z',
     });
-    await store.listReviewRecords(sourceKey);
+    await store.listReviewRecords(sourceKey, {
+      reviewDateRange: {
+        startDate: '2026-05-01 00:00:00',
+        endDate: '2026-05-01 23:59:59',
+      },
+    });
     await store.getReviewRecord(sourceKey, 'rec-1');
     await store.softDeleteMissingRecords({
       sourceKey,
@@ -539,6 +679,8 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     const sql = client.sqlLog.join('\n');
     expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, record_id)');
     expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and is_deleted = false');
+    expect(sql).toContain("and (parsed_review_json->>'reviewDate') >= $4");
+    expect(sql).toContain("and (parsed_review_json->>'reviewDate') <= $5");
     expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and record_id = $4');
     expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, version)');
     expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3');
@@ -556,7 +698,13 @@ function toQuery(key: ReviewSyncSourceKey): ReviewSourceQuery {
   };
 }
 
-function review(recordId: string, content: string, rating: number, contentHash = `${recordId}:${content}`): ReviewRecord {
+function review(
+  recordId: string,
+  content: string,
+  rating: number,
+  contentHash = `${recordId}:${content}`,
+  reviewDate = '2026-06-15 10:00:00',
+): ReviewRecord {
   return {
     recordId,
     fields: {
@@ -568,6 +716,7 @@ function review(recordId: string, content: string, rating: number, contentHash =
       content,
       rating,
       hotelName: 'Hotel A',
+      reviewDate,
     },
     content,
     contentHash,

@@ -13,12 +13,15 @@ import { createPostgresAnalysisBackendStore } from './postgresAnalysisStore';
 import { createPostgresAnalysisCacheRepository } from './postgresAnalysisCache';
 import { createPostgresReviewSyncStore } from './postgresReviewSyncStore';
 import { createPostgresFacilityAnalysisStore } from './postgresFacilityAnalysisStore';
+import { createPostgresWarmupJobStore } from './warmupJobStore';
 import { PostgresReviewSource } from './postgresReviewSource';
 import { createFeishuBaseReviewSourceFactory } from './reviewSourceRuntime';
 import { ReviewSyncService } from './reviewSync';
 import { handleReviewSyncRequest } from './syncHandler';
+import { createSyncWarmupFollowupQueue, type SyncWarmupOptions } from './syncWarmupFollowup';
 import { replayQueuedSyncJobsOnStartup } from './startupSyncReplay';
 import { handleWarmupRequest } from './warmupHandler';
+import { createWarmupService, WarmupJobWorker } from './warmupJob';
 import type { ReviewSource } from './reviewSource';
 
 loadLocalEnvFiles();
@@ -31,6 +34,7 @@ const postgresPool = createPostgresPool();
 const backendAnalysisStore = createPostgresAnalysisBackendStore(postgresPool);
 const analysisCacheRepository = createPostgresAnalysisCacheRepository(postgresPool);
 const reviewSyncStore = createPostgresReviewSyncStore(postgresPool);
+const warmupJobStore = createPostgresWarmupJobStore(postgresPool);
 const facilityAnalysisStore = createPostgresFacilityAnalysisStore(postgresPool);
 const facilityAnalysisRunner = createFacilityAnalysisRunner({
   store: facilityAnalysisStore,
@@ -52,6 +56,9 @@ const backendAnalysisService = new AnalysisBackendService({
   reviewSources,
   baseSummaryExporter: createFeishuBaseSummaryExporterFactory(),
 });
+const formalAnalysisRunner = createFormalAnalysisCacheRunner({
+  cacheRepository: analysisCacheRepository,
+});
 const backendAnalysisWorker = new AnalysisJobWorker({
   service: backendAnalysisService,
   store: backendAnalysisStore,
@@ -59,12 +66,26 @@ const backendAnalysisWorker = new AnalysisJobWorker({
     feishu_base: feishuBaseReviewSource as ReviewSource,
     postgres: postgresReviewSource as ReviewSource,
   },
-  runner: createFormalAnalysisCacheRunner({
-    cacheRepository: analysisCacheRepository,
-  }),
+  runner: formalAnalysisRunner,
+});
+const warmupService = createWarmupService({
+  store: warmupJobStore,
+});
+const warmupJobWorker = new WarmupJobWorker({
+  store: warmupJobStore,
+  reviewSource: postgresReviewSource as ReviewSource,
+  runner: formalAnalysisRunner,
 });
 const analysisJobQueue = createSerialJobQueue((jobId) => backendAnalysisWorker.runAnalysisJob(jobId));
-const syncJobQueue = createSerialSyncQueue((jobId) => reviewSyncService.runQueuedSyncJob(jobId));
+const warmupJobQueue = createSerialJobQueue((jobId) => warmupJobWorker.runWarmupJob(jobId));
+const syncWarmupFollowupQueue = createSyncWarmupFollowupQueue({
+  runSyncJob: (jobId) => reviewSyncService.runQueuedSyncJob(jobId),
+  createWarmupJob: (input) => warmupService.createWarmupJob(input),
+  enqueueWarmupJob: (jobId) => warmupJobQueue.enqueue(jobId),
+});
+const syncJobQueue = createSerialSyncQueue((jobId, sourceKey, warmup) =>
+  syncWarmupFollowupQueue.runSyncJobWithWarmup(jobId, sourceKey, warmup),
+);
 await replayQueuedSyncJobsOnStartup({
   store: reviewSyncStore,
   queue: syncJobQueue,
@@ -90,7 +111,11 @@ server.listen(port, '127.0.0.1', () => {
 async function routeRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/api/hotel-review-ai/warmup') {
-    return handleWarmupRequest(request, { warmupSecret });
+    return handleWarmupRequest(request, {
+      warmupSecret,
+      service: warmupService,
+      onWarmupJobCreated: (jobId) => warmupJobQueue.enqueue(jobId),
+    });
   }
   if (url.pathname === '/api/hotel-review-ai/facilities/analyze') {
     return handleFacilityAnalysisRequest(request, {
@@ -101,7 +126,8 @@ async function routeRequest(request: Request): Promise<Response> {
   if (url.pathname.startsWith('/api/hotel-review-ai/sync/')) {
     return handleReviewSyncRequest(request, {
       service: reviewSyncService,
-      onSyncJobCreated: (jobId) => syncJobQueue.enqueue(jobId),
+      onSyncJobCreated: (jobId, sourceKey) => syncJobQueue.enqueue(jobId, sourceKey),
+      onWarmupRequested: ({ syncJobId, sourceKey, warmup }) => syncJobQueue.attachWarmup(syncJobId, sourceKey, warmup),
     });
   }
   return handleBackendAnalysisRequest(request, {
@@ -172,9 +198,13 @@ function createSerialJobQueue(runJob: (jobId: string) => Promise<unknown>) {
   };
 }
 
-function createSerialSyncQueue(runJob: (jobId: string) => Promise<unknown>) {
+function createSerialSyncQueue(runJob: (jobId: string, sourceKey?: Parameters<typeof syncWarmupFollowupQueue.runSyncJobWithWarmup>[1], warmup?: SyncWarmupOptions) => Promise<unknown>) {
   const pendingJobs: string[] = [];
   const pendingSet = new Set<string>();
+  const warmupByJobId = new Map<string, {
+    sourceKey: Parameters<typeof syncWarmupFollowupQueue.runSyncJobWithWarmup>[1];
+    warmup: SyncWarmupOptions;
+  }>();
   let running = false;
 
   const drain = async () => {
@@ -189,8 +219,10 @@ function createSerialSyncQueue(runJob: (jobId: string) => Promise<unknown>) {
           continue;
         }
         pendingSet.delete(jobId);
+        const warmup = warmupByJobId.get(jobId);
+        warmupByJobId.delete(jobId);
         try {
-          await runJob(jobId);
+          await runJob(jobId, warmup?.sourceKey, warmup?.warmup);
         } catch (cause) {
           console.error('__HOTEL_REVIEW_AI_SYNC_JOB_ERROR__', cause);
         }
@@ -211,6 +243,9 @@ function createSerialSyncQueue(runJob: (jobId: string) => Promise<unknown>) {
       pendingSet.add(jobId);
       pendingJobs.push(jobId);
       void drain();
+    },
+    attachWarmup(jobId: string, sourceKey: Parameters<typeof syncWarmupFollowupQueue.runSyncJobWithWarmup>[1], warmup: SyncWarmupOptions): void {
+      warmupByJobId.set(jobId, { sourceKey, warmup });
     },
   };
 }

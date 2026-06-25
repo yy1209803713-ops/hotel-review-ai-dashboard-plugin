@@ -11,6 +11,12 @@ dayjs.extend(timezone);
 
 export const TIME_ZONE = 'Asia/Shanghai';
 
+export type ReviewDateRangeBoundary = 'start' | 'end';
+
+const STRICT_DATE_ONLY_FORMAT = 'YYYY-MM-DD';
+const STRICT_DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm:ss';
+const STRICT_REVIEW_RANGE_PATTERN = /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?$/;
+
 const DATE_FORMATS = [
   'YYYY-MM-DD HH:mm:ss',
   'YYYY/MM/DD HH:mm:ss',
@@ -43,12 +49,58 @@ export function parseReviewDate(value: string | null | undefined): Dayjs | null 
   return fallback.isValid() ? fallback : null;
 }
 
+export function isReviewDateRangeBoundaryString(value: string): boolean {
+  return parseReviewDateRangeBoundary(value, 'start') !== null;
+}
+
+export function parseReviewDateRangeBoundary(
+  value: string | null | undefined,
+  boundary: ReviewDateRangeBoundary,
+): Dayjs | null {
+  const text = value?.trim();
+  if (!text || !STRICT_REVIEW_RANGE_PATTERN.test(text)) {
+    return null;
+  }
+
+  const parsed = parseStrictReviewRangeBoundary(text);
+  if (!parsed) {
+    return null;
+  }
+
+  if (isStrictDateOnly(text)) {
+    return boundary === 'start' ? parsed.startOf('day') : parsed.endOf('day');
+  }
+
+  return parsed;
+}
+
+export function formatReviewDateRangeBoundary(
+  value: string | null | undefined,
+  boundary: ReviewDateRangeBoundary,
+): string | undefined {
+  return parseReviewDateRangeBoundary(value, boundary)?.format(STRICT_DATE_TIME_FORMAT);
+}
+
 function safeParseTz(text: string, format?: string): Dayjs {
   try {
     return format ? dayjs.tz(text, format, TIME_ZONE) : dayjs.tz(text, TIME_ZONE);
   } catch {
     return dayjs(Number.NaN);
   }
+}
+
+function parseStrictReviewRangeBoundary(text: string): Dayjs | null {
+  const format = isStrictDateOnly(text) ? STRICT_DATE_ONLY_FORMAT : STRICT_DATE_TIME_FORMAT;
+  const strictParsed = dayjs(text, format, true);
+  if (!strictParsed.isValid() || strictParsed.format(format) !== text) {
+    return null;
+  }
+  const parsed = safeParseTz(text, format);
+  return parsed.isValid() ? parsed : null;
+}
+
+function isStrictDateOnly(text: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(text);
 }
 
 export function getPeriodRange(
@@ -81,8 +133,8 @@ export function filterReviews(records: ReviewRecord[], filters: FilterState): Re
     filters.periodType === 'custom'
       ? { startDate: filters.startDate, endDate: filters.endDate }
       : getPeriodRange(filters.periodType);
-  const start = range.startDate ? dayjs.tz(`${range.startDate} 00:00:00`, 'YYYY-MM-DD HH:mm:ss', TIME_ZONE) : null;
-  const end = range.endDate ? dayjs.tz(`${range.endDate} 23:59:59`, 'YYYY-MM-DD HH:mm:ss', TIME_ZONE) : null;
+  const start = range.startDate ? parseReviewDateRangeBoundary(range.startDate, 'start') : null;
+  const end = range.endDate ? parseReviewDateRangeBoundary(range.endDate, 'end') : null;
   const keyword = filters.keyword.trim().toLocaleLowerCase();
 
   return records.filter((record) => {

@@ -70,6 +70,11 @@ export type AnalysisTopicMappingCacheReadResult = {
   diagnostics: AnalysisTopicMappingCacheDiagnostics;
 };
 
+export type AnalysisCacheWriteResult = {
+  inserts: number;
+  updates: number;
+};
+
 export type EvidenceBatchDiagnosticInput = AnalysisCacheSourceIdentity & {
   jobId: string;
   model: string;
@@ -99,7 +104,7 @@ export type AnalysisCacheRepository = {
     records: ReviewRecord[];
     evidenceItems: TopicEvidenceItem[];
     now?: string;
-  }): Promise<void>;
+  }): Promise<AnalysisCacheWriteResult>;
   readTopicMappingCache(input: AnalysisCacheSourceIdentity & {
     model: string;
     candidates: TopicMergeCandidate[];
@@ -110,7 +115,7 @@ export type AnalysisCacheRepository = {
     candidates: TopicMergeCandidate[];
     groups: TopicMergeGroup[];
     now?: string;
-  }): Promise<void>;
+  }): Promise<AnalysisCacheWriteResult>;
   saveEvidenceBatchDiagnostic?(input: EvidenceBatchDiagnosticInput): Promise<void>;
 };
 
@@ -200,12 +205,13 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
 
     async saveEvidenceCacheEntries(input) {
       if (!input.records.length) {
-        return;
+        return { inserts: 0, updates: 0 };
       }
       const now = input.now ?? new Date().toISOString();
       const evidenceByRecordId = groupEvidenceByRecord(input.evidenceItems);
+      const result: AnalysisCacheWriteResult = { inserts: 0, updates: 0 };
       for (const record of input.records) {
-        await client.query(
+        const { rows } = await client.query<{ inserted: boolean }>(
           `insert into evidence_cache (
             tenant_key, source_kind, source_id, source_record_id, content_hash,
             model, extractor_version, evidence_json, created_at, updated_at, last_used_at
@@ -214,7 +220,8 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
           do update set
             evidence_json = excluded.evidence_json,
             updated_at = excluded.updated_at,
-            last_used_at = excluded.last_used_at`,
+            last_used_at = excluded.last_used_at
+          returning (xmax = 0) as inserted`,
           [
             input.tenantKey,
             input.sourceKind,
@@ -227,7 +234,13 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
             now,
           ],
         );
+        if (rows[0]?.inserted) {
+          result.inserts += 1;
+        } else {
+          result.updates += 1;
+        }
       }
+      return result;
     },
 
     async readTopicMappingCache(input) {
@@ -319,16 +332,17 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
 
     async saveTopicMappingCacheEntries(input) {
       if (!input.candidates.length || !input.groups.length) {
-        return;
+        return { inserts: 0, updates: 0 };
       }
       const now = input.now ?? new Date().toISOString();
       const mappings = buildMappingsFromGroups(input.candidates, input.groups);
+      const result: AnalysisCacheWriteResult = { inserts: 0, updates: 0 };
       for (const candidate of input.candidates) {
         const mapping = mappings.get(candidateKey(candidate));
         if (!mapping) {
           continue;
         }
-        await client.query(
+        const { rows } = await client.query<{ inserted: boolean }>(
           `insert into topic_mapping_cache (
             tenant_key, source_kind, source_id, sentiment, normalized_source_label,
             model, mapping_version, mapping_json, created_at, updated_at, last_used_at
@@ -337,7 +351,8 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
           do update set
             mapping_json = excluded.mapping_json,
             updated_at = excluded.updated_at,
-            last_used_at = excluded.last_used_at`,
+            last_used_at = excluded.last_used_at
+          returning (xmax = 0) as inserted`,
           [
             input.tenantKey,
             input.sourceKind,
@@ -350,7 +365,13 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
             now,
           ],
         );
+        if (rows[0]?.inserted) {
+          result.inserts += 1;
+        } else {
+          result.updates += 1;
+        }
       }
+      return result;
     },
 
     async saveEvidenceBatchDiagnostic(input) {

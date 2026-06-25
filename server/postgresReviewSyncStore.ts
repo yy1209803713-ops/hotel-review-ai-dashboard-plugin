@@ -55,6 +55,13 @@ export type StoredReviewRecord = {
   updatedAt: string;
 };
 
+export type ReviewRecordListOptions = {
+  reviewDateRange?: {
+    startDate?: string;
+    endDate?: string;
+  };
+};
+
 export type ReviewSyncStore = {
   createSyncJob(input: {
     sourceKey: ReviewSyncSourceKey;
@@ -82,7 +89,7 @@ export type ReviewSyncStore = {
     syncedAt: string;
   }): Promise<boolean>;
   getReviewRecord(sourceKey: ReviewSyncSourceKey, recordId: string): Promise<StoredReviewRecord | undefined>;
-  listReviewRecords(sourceKey: ReviewSyncSourceKey): Promise<StoredReviewRecord[]>;
+  listReviewRecords(sourceKey: ReviewSyncSourceKey, options?: ReviewRecordListOptions): Promise<StoredReviewRecord[]>;
   saveSourceVersion(sourceKey: ReviewSyncSourceKey, sourceVersion: SourceVersion): Promise<SourceVersion>;
   getLatestSourceVersion(sourceKey: ReviewSyncSourceKey): Promise<SourceVersion | undefined>;
   completeSyncJob(input: {
@@ -232,9 +239,9 @@ export function createInMemoryReviewSyncStore(): ReviewSyncStore {
       return cloneOrUndefined(records.get(makeRecordKey(sourceKey, recordId)));
     },
 
-    async listReviewRecords(sourceKey) {
+    async listReviewRecords(sourceKey, options) {
       return Array.from(records.values())
-        .filter((record) => matchesSource(record, sourceKey) && !record.isDeleted)
+        .filter((record) => matchesSource(record, sourceKey) && !record.isDeleted && matchesReviewDateRange(record, options?.reviewDateRange))
         .sort((left, right) => left.recordId.localeCompare(right.recordId))
         .map((record) => deepClone(record));
     },
@@ -404,13 +411,21 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
       return rows[0] ? reviewRecordFromRow(rows[0]) : undefined;
     },
 
-    async listReviewRecords(sourceKey) {
-      const { rows } = await client.query<ReviewRecordRow>(
-        `select * from review_records
-        where tenant_key = $1 and source_kind = $2 and source_id = $3 and is_deleted = false
-        order by record_id asc`,
-        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId],
-      );
+    async listReviewRecords(sourceKey, options) {
+      const values: unknown[] = [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId];
+      const reviewDateRange = options?.reviewDateRange;
+      let sql = `select * from review_records
+        where tenant_key = $1 and source_kind = $2 and source_id = $3 and is_deleted = false`;
+      if (reviewDateRange?.startDate) {
+        values.push(reviewDateRange.startDate);
+        sql += ` and (parsed_review_json->>'reviewDate') >= $${values.length}`;
+      }
+      if (reviewDateRange?.endDate) {
+        values.push(reviewDateRange.endDate);
+        sql += ` and (parsed_review_json->>'reviewDate') <= $${values.length}`;
+      }
+      sql += ' order by record_id asc';
+      const { rows } = await client.query<ReviewRecordRow>(sql, values);
       return rows.map(reviewRecordFromRow);
     },
 
@@ -786,6 +801,23 @@ function matchesSource(record: StoredReviewRecord, sourceKey: ReviewSyncSourceKe
     record.sourceKind === sourceKey.sourceKind &&
     record.sourceId === sourceKey.sourceId
   );
+}
+
+function matchesReviewDateRange(record: StoredReviewRecord, range: ReviewRecordListOptions['reviewDateRange']): boolean {
+  if (!range?.startDate && !range?.endDate) {
+    return true;
+  }
+  const reviewDate = record.parsedReview.reviewDate;
+  if (typeof reviewDate !== 'string' || !reviewDate) {
+    return false;
+  }
+  if (range.startDate && reviewDate < range.startDate) {
+    return false;
+  }
+  if (range.endDate && reviewDate > range.endDate) {
+    return false;
+  }
+  return true;
 }
 
 function requireSingleRow<T>(rows: T[], message: string): T {

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { handleWarmupRequest } from './warmupHandler';
+import { createWarmupService } from './warmupJob';
+import { createInMemoryWarmupJobStore } from './warmupJobStore';
 
 describe('handleWarmupRequest', () => {
   it('rejects requests without the configured bearer token', async () => {
@@ -13,6 +15,7 @@ describe('handleWarmupRequest', () => {
         body: JSON.stringify({
           mode: 'incremental',
           source: 'feishu-workflow',
+          baseToken: 'base-a',
           tableId: 'tbl-review',
         }),
       }),
@@ -31,6 +34,11 @@ describe('handleWarmupRequest', () => {
 
   it('accepts Feishu Workflow warmup requests and logs trigger metadata', async () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const enqueue = vi.fn();
+    const service = createWarmupService({
+      store: createInMemoryWarmupJobStore(),
+      now: () => '2026-06-17T06:00:00.000Z',
+    });
 
     const response = await handleWarmupRequest(
       new Request('http://127.0.0.1:8787/api/hotel-review-ai/warmup', {
@@ -45,43 +53,100 @@ describe('handleWarmupRequest', () => {
           baseToken: 'base-a',
           tableId: 'tbl-review',
           viewId: 'view-a',
+          fieldMapping: {
+            content: 'fld-content',
+            reviewDate: 'fld-review-date',
+          },
+          startDate: '2026-06-01',
+          endDate: '2026-06-30',
         }),
       }),
       {
         warmupSecret: 'local-warmup-secret',
         now: () => '2026-06-17T06:00:00.000Z',
+        service,
+        onWarmupJobCreated: enqueue,
       },
     );
 
     expect(response.status).toBe(202);
     expect(response.headers.get('Access-Control-Allow-Private-Network')).toBe('true');
     await expect(response.json()).resolves.toEqual({
-      jobId: 'warmup-2026-06-17T06:00:00.000Z-tbl-review',
+      jobId: 'warmup-job-1',
       status: 'accepted',
       mode: 'incremental',
       summary: {
+        recordsScanned: 0,
         totalReviews: 0,
         evidenceCacheHits: 0,
         evidenceCacheMisses: 0,
         evidenceRecordsSaved: 0,
+        evidenceCacheInserts: 0,
+        evidenceCacheUpdates: 0,
         topicMappingHits: 0,
         topicMappingMisses: 0,
         topicMappingsSaved: 0,
+        topicMappingCacheInserts: 0,
+        topicMappingCacheUpdates: 0,
       },
       errors: [],
     });
+    expect(enqueue).toHaveBeenCalledWith('warmup-job-1');
     expect(infoSpy).toHaveBeenCalledWith(
       '__HOTEL_REVIEW_AI_WARMUP_TRIGGER__',
       JSON.stringify({
-        jobId: 'warmup-2026-06-17T06:00:00.000Z-tbl-review',
+        jobId: 'warmup-job-1',
         source: 'feishu-workflow',
         mode: 'incremental',
         baseToken: 'base-a',
         tableId: 'tbl-review',
         viewId: 'view-a',
+        startDate: '2026-06-01',
+        endDate: '2026-06-30',
         dryRun: false,
       }),
     );
+  });
+
+  it('accepts second-precision review time ranges for manual warmup requests', async () => {
+    const service = createWarmupService({
+      store: createInMemoryWarmupJobStore(),
+      now: () => '2026-06-25T09:00:00.000Z',
+    });
+
+    const response = await handleWarmupRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/warmup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer local-warmup-secret',
+        },
+        body: JSON.stringify({
+          mode: 'incremental',
+          source: 'manual',
+          baseToken: 'base-a',
+          tableId: 'tbl-review',
+          fieldMapping: {
+            content: 'fld-content',
+            reviewDate: 'fld-review-date',
+          },
+          startDate: '2026-05-01 00:00:00',
+          endDate: '2026-05-01 23:59:59',
+        }),
+      }),
+      {
+        warmupSecret: 'local-warmup-secret',
+        now: () => '2026-06-25T09:00:00.000Z',
+        service,
+      },
+    );
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      jobId: 'warmup-job-1',
+      status: 'accepted',
+      mode: 'incremental',
+    });
   });
 
   it('returns not found for other paths', async () => {

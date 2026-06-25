@@ -47,6 +47,27 @@ describe('backend owned migration', () => {
     expect(migrationSql).not.toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS sync_jobs_active_source_trigger_uidx/);
   });
 
+  it('contains auditable warmup job schema statements', () => {
+    expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS warmup_jobs');
+    expect(migrationSql).toContain("mode text NOT NULL CHECK (mode IN ('bootstrap', 'incremental'))");
+    expect(migrationSql).toContain("trigger_type text NOT NULL CHECK (trigger_type IN ('manual_api', 'sync_followup', 'feishu_workflow', 'dashboard_button'))");
+    expect(migrationSql).toContain('request_json jsonb NOT NULL');
+    expect(migrationSql).toContain('accepted_response_json jsonb NOT NULL');
+    expect(migrationSql).toContain('result_json jsonb NOT NULL DEFAULT');
+    expect(migrationSql).toContain('review_start_date text');
+    expect(migrationSql).toContain('review_end_date text');
+    expect(migrationSql).toContain('records_scanned integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('evidence_cache_hits integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('evidence_cache_misses integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('evidence_cache_inserts integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('evidence_cache_updates integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('topic_mapping_cache_hits integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('topic_mapping_cache_misses integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('topic_mapping_cache_inserts integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('topic_mapping_cache_updates integer NOT NULL DEFAULT 0');
+    expect(migrationSql).toContain('CREATE INDEX IF NOT EXISTS warmup_jobs_source_idx');
+  });
+
   it('keeps a standalone migration for the active sync job unique index', () => {
     expect(syncJobsActiveIndexMigrationSql).toContain(
       "to_regclass(current_schema() || '.sync_jobs_active_source_trigger_uidx')",

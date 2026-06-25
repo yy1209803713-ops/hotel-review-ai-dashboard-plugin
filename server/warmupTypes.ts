@@ -19,6 +19,9 @@ export type WarmupRequest = {
   baseToken?: string;
   tableId: string;
   viewId?: string;
+  fieldMapping?: Record<string, string>;
+  startDate?: string;
+  endDate?: string;
   configId?: string;
   dryRun?: boolean;
 };
@@ -28,13 +31,18 @@ export type WarmupResponse = {
   status: 'accepted' | 'running' | 'success' | 'partial_success' | 'failed' | 'skipped';
   mode: WarmupMode;
   summary: {
+    recordsScanned?: number;
     totalReviews: number;
     evidenceCacheHits: number;
     evidenceCacheMisses: number;
     evidenceRecordsSaved: number;
+    evidenceCacheInserts?: number;
+    evidenceCacheUpdates?: number;
     topicMappingHits: number;
     topicMappingMisses: number;
     topicMappingsSaved: number;
+    topicMappingCacheInserts?: number;
+    topicMappingCacheUpdates?: number;
   };
   errors: Array<{
     stage: WarmupStage;

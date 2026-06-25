@@ -8,7 +8,17 @@
 2. 通过 `src/services/warmupClient.ts` 向后端 warmup API 发起请求。
 3. 通过 `server/` 提供一个最小本地 warmup HTTP endpoint。
 
-当前 `server/` 先用于接住插件或飞书工作流请求、校验 `WARMUP_SECRET`、输出触发日志并返回标准 `WarmupResponse`。真正读取 Base、写缓存表、跑 AI 的执行适配仍需继续接入。
+当前 `server/` 会接住插件、飞书工作流或手工请求，校验 `WARMUP_SECRET`，创建 `warmup_jobs` 审计记录，异步读取 Postgres 全局评论镜像并复用正式分析 runner 构建两层缓存。
+
+Warmup 不直接从飞书 Base 读取评论。它使用已经同步到数据库的全局 read model：
+
+```text
+tenant_key = global-review-source
+source_kind = feishu_base
+source_id = <baseToken>:<tableId>
+```
+
+如果还没有先跑过 `/api/hotel-review-ai/sync/full` 或 `/api/hotel-review-ai/sync/incremental`，warmup 会失败并把错误记录到 `warmup_jobs`。
 
 ## 本地启动
 
@@ -59,13 +69,115 @@ https://<tunnel-domain>/api/hotel-review-ai/warmup
 {
   "mode": "incremental",
   "source": "dashboard-button",
+  "baseToken": "base_xxx",
   "tableId": "tbl_xxx",
+  "fieldMapping": {
+    "reviewId": "fld_review_id",
+    "content": "fld_content",
+    "hotelName": "fld_hotel",
+    "score": "fld_score",
+    "reviewDate": "fld_review_date",
+    "checkInMonth": "fld_checkin_month",
+    "replyContent": "fld_reply",
+    "roomType": "fld_room_type"
+  },
   "viewId": "view_xxx",
+  "startDate": "2026-06-01",
+  "endDate": "2026-06-30",
   "dryRun": false
 }
 ```
 
-`bootstrap` 用于首次初始化；`incremental` 用于日常补齐。
+`bootstrap` 用于首次初始化；`incremental` 用于日常补齐。`startDate` / `endDate` 是评论时间口径，对应评论字段 `reviewDate`；不传时扫描当前全局 read model 全部评论，再只对两层缓存 miss 调 AI。
+
+本地 curl：
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8787/api/hotel-review-ai/warmup' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer local-warmup-secret' \
+  --data-raw '{
+    "mode": "incremental",
+    "source": "manual",
+    "baseToken": "base_xxx",
+    "tableId": "tbl_xxx",
+    "fieldMapping": {
+      "reviewId": "fld_review_id",
+      "content": "fld_content",
+      "hotelName": "fld_hotel",
+      "score": "fld_score",
+      "reviewDate": "fld_review_date",
+      "checkInMonth": "fld_checkin_month",
+      "replyContent": "fld_reply",
+      "roomType": "fld_room_type"
+    },
+    "startDate": "2026-06-01",
+    "endDate": "2026-06-30"
+  }'
+```
+
+返回 `202 accepted` 后，后台继续执行。结果和统计查看：
+
+`records_scanned` 是 warmup 从全局 read model 扫到的原始评论数量；最终 `result_json.summary.totalReviews` 是按 `reviewDate` 时间范围过滤后进入两层缓存构建的评论数量。
+
+```sql
+select
+  id,
+  status,
+  trigger_type,
+  review_start_date,
+  review_end_date,
+  records_scanned,
+  evidence_cache_hits,
+  evidence_cache_misses,
+  evidence_cache_inserts,
+  evidence_cache_updates,
+  topic_mapping_cache_hits,
+  topic_mapping_cache_misses,
+  topic_mapping_cache_inserts,
+  topic_mapping_cache_updates,
+  error_stage,
+  error_message,
+  created_at,
+  started_at,
+  finished_at
+from warmup_jobs
+order by created_at desc
+limit 10;
+```
+
+## Sync 后联动 warmup
+
+`/api/hotel-review-ai/sync/full` 和 `/api/hotel-review-ai/sync/incremental` 支持可选 `warmup` 参数。默认不联动，只有显式传 `warmup.enabled=true` 时，sync job 成功后才 enqueue warmup job。联动 warmup 在 sync 写入评论 read model、source version 和 sync job success 状态的事务提交之后才创建，因此能读到本次 sync 的新增/更新/删除结果。
+
+示例：
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{
+    "baseToken": "base_xxx",
+    "tableId": "tbl_xxx",
+    "fieldMapping": {
+      "reviewId": "fld_review_id",
+      "content": "fld_content",
+      "hotelName": "fld_hotel",
+      "score": "fld_score",
+      "reviewDate": "fld_review_date",
+      "checkInMonth": "fld_checkin_month",
+      "replyContent": "fld_reply",
+      "roomType": "fld_room_type"
+    },
+    "warmup": {
+      "enabled": true,
+      "mode": "incremental",
+      "startDate": "2026-06-01",
+      "endDate": "2026-06-30"
+    }
+  }'
+```
+
+`/sync/full` 使用同样的 body 结构。联动 warmup 的 `trigger_type` 会记录为 `sync_followup`。
 
 ## Workflow 侧调用
 
@@ -108,15 +220,16 @@ Body:
 
 ## 后端环境变量
 
-当前最小本地后端需要：
+当前本地后端需要：
 
 ```text
 WARMUP_SECRET
 ```
 
-后续接入真实 Base 读写和 AI 执行时，还需要：
+真实同步、warmup 和 AI 执行还需要：
 
 ```text
+DATABASE_URL
 LARK_BASE_AUTH_CODE
 AI_API_KEY
 AI_BASE_URL
@@ -138,4 +251,4 @@ __HOTEL_REVIEW_AI_WARMUP_TRIGGER__ {"jobId":"warmup-...","source":"feishu-workfl
 
 ## 现阶段说明
 
-当前仓库已有最小本地后端 API 宿主：`server/index.ts` 和 `server/warmupHandler.ts`。它用于验证插件和飞书工作流是否能触发 warmup endpoint；真实 warmup 执行还需要把 Base OpenAPI 读写和 AI pipeline 接入到这个 endpoint 后面。
+当前仓库已有后端 API 宿主：`server/index.ts` 和 `server/warmupHandler.ts`。`warmup_jobs` 会记录每次触发的入参、接口 accepted response、最终结果、触发时间、扫描评论数量、两层缓存 hit/miss、新增/更新数量和错误信息。

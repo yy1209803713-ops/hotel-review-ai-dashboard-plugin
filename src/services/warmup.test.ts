@@ -146,6 +146,7 @@ describe('warmupAnalysisCache', () => {
     expect(result.status).toBe('success');
     expect(result.jobId).toBe('warmup-2026-06-17T06:00:00.000Z-tbl-review');
     expect(result.summary).toEqual({
+      recordsScanned: 2,
       totalReviews: 2,
       evidenceCacheHits: 1,
       evidenceCacheMisses: 1,

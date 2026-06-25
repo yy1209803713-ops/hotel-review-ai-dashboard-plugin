@@ -587,6 +587,79 @@ ALTER TABLE sync_jobs
   ADD CONSTRAINT sync_jobs_mode_check
   CHECK (mode IN ('full', 'incremental'));
 
+CREATE TABLE IF NOT EXISTS warmup_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_key text NOT NULL,
+  source_kind text NOT NULL,
+  source_id text NOT NULL,
+  base_token text,
+  table_id text,
+  mode text NOT NULL CHECK (mode IN ('bootstrap', 'incremental')),
+  trigger_type text NOT NULL CHECK (trigger_type IN ('manual_api', 'sync_followup', 'feishu_workflow', 'dashboard_button')),
+  status text NOT NULL CHECK (status IN ('queued', 'running', 'success', 'failed', 'canceled')),
+  stage text NOT NULL,
+  request_json jsonb NOT NULL,
+  accepted_response_json jsonb NOT NULL,
+  result_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  review_start_date text,
+  review_end_date text,
+  records_scanned integer NOT NULL DEFAULT 0,
+  evidence_cache_hits integer NOT NULL DEFAULT 0,
+  evidence_cache_misses integer NOT NULL DEFAULT 0,
+  evidence_cache_inserts integer NOT NULL DEFAULT 0,
+  evidence_cache_updates integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_hits integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_misses integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_inserts integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_updates integer NOT NULL DEFAULT 0,
+  error_stage text,
+  error_message text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  duration_ms integer,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS warmup_jobs_source_idx
+  ON warmup_jobs (tenant_key, source_kind, source_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS warmup_jobs_status_idx
+  ON warmup_jobs (status, created_at ASC);
+
+COMMENT ON TABLE warmup_jobs IS '缓存预热任务表，记录每次 warmup 触发、入参、返回、执行结果和两层缓存构建统计。';
+COMMENT ON COLUMN warmup_jobs.id IS '预热任务主键。';
+COMMENT ON COLUMN warmup_jobs.tenant_key IS '共享来源租户标识，通常为 global-review-source。';
+COMMENT ON COLUMN warmup_jobs.source_kind IS '来源类型。';
+COMMENT ON COLUMN warmup_jobs.source_id IS '来源标识，按 baseToken:tableId 规范化。';
+COMMENT ON COLUMN warmup_jobs.base_token IS 'Base 访问令牌。';
+COMMENT ON COLUMN warmup_jobs.table_id IS 'Base 表 ID。';
+COMMENT ON COLUMN warmup_jobs.mode IS '预热模式：bootstrap 初始化，incremental 增量补齐。';
+COMMENT ON COLUMN warmup_jobs.trigger_type IS '触发类型：手动 API、同步后联动、飞书工作流或插件按钮。';
+COMMENT ON COLUMN warmup_jobs.status IS '任务状态。';
+COMMENT ON COLUMN warmup_jobs.stage IS '当前执行阶段。';
+COMMENT ON COLUMN warmup_jobs.request_json IS '原始 warmup 请求入参，JSON 格式。';
+COMMENT ON COLUMN warmup_jobs.accepted_response_json IS '接口接受任务时返回给调用方的响应，JSON 格式。';
+COMMENT ON COLUMN warmup_jobs.result_json IS '任务完成或失败后的最终 WarmupResponse，JSON 格式。';
+COMMENT ON COLUMN warmup_jobs.review_start_date IS '评论时间筛选开始边界，支持 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss。';
+COMMENT ON COLUMN warmup_jobs.review_end_date IS '评论时间筛选结束边界，支持 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss。';
+COMMENT ON COLUMN warmup_jobs.records_scanned IS '本次预热扫描到的原始评论数量。';
+COMMENT ON COLUMN warmup_jobs.evidence_cache_hits IS '证据缓存命中数量。';
+COMMENT ON COLUMN warmup_jobs.evidence_cache_misses IS '证据缓存未命中数量。';
+COMMENT ON COLUMN warmup_jobs.evidence_cache_inserts IS '证据缓存新增数量。';
+COMMENT ON COLUMN warmup_jobs.evidence_cache_updates IS '证据缓存更新数量。';
+COMMENT ON COLUMN warmup_jobs.topic_mapping_cache_hits IS '主题映射缓存命中数量。';
+COMMENT ON COLUMN warmup_jobs.topic_mapping_cache_misses IS '主题映射缓存未命中数量。';
+COMMENT ON COLUMN warmup_jobs.topic_mapping_cache_inserts IS '主题映射缓存新增数量。';
+COMMENT ON COLUMN warmup_jobs.topic_mapping_cache_updates IS '主题映射缓存更新数量。';
+COMMENT ON COLUMN warmup_jobs.error_stage IS '出错阶段。';
+COMMENT ON COLUMN warmup_jobs.error_message IS '错误信息。';
+COMMENT ON COLUMN warmup_jobs.started_at IS '开始时间。';
+COMMENT ON COLUMN warmup_jobs.finished_at IS '结束时间。';
+COMMENT ON COLUMN warmup_jobs.duration_ms IS '任务耗时，单位毫秒。';
+COMMENT ON COLUMN warmup_jobs.created_at IS '创建时间。';
+COMMENT ON COLUMN warmup_jobs.updated_at IS '更新时间。';
+
 CREATE TABLE IF NOT EXISTS schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_key text NOT NULL,

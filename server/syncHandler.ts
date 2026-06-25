@@ -5,10 +5,12 @@ import {
   type ReviewSyncService,
   type ReviewSyncSourceKey,
 } from './reviewSync';
+import type { WarmupMode } from './warmupTypes';
 
 export type ReviewSyncHandlerOptions = {
   service: ReviewSyncService;
   onSyncJobCreated?: (jobId: string, sourceKey: ReviewSyncSourceKey) => void;
+  onWarmupRequested?: (request: SyncWarmupRequest) => void;
 };
 
 type ErrorBody = {
@@ -20,6 +22,23 @@ type SyncSourceRequestBody = {
   baseToken?: string;
   tableId?: string;
   fieldMapping?: Record<string, string>;
+  warmup?: {
+    enabled?: boolean;
+    mode?: WarmupMode;
+    startDate?: string;
+    endDate?: string;
+  };
+};
+
+export type SyncWarmupRequest = {
+  syncJobId: string;
+  sourceKey: ReviewSyncSourceKey;
+  warmup: {
+    enabled: true;
+    mode: WarmupMode;
+    startDate?: string;
+    endDate?: string;
+  };
 };
 
 const API_PREFIX = '/api/hotel-review-ai';
@@ -38,6 +57,18 @@ export async function handleReviewSyncRequest(request: Request, options: ReviewS
       const sourceKey = buildCanonicalReviewSyncSourceKey(body as Required<SyncSourceRequestBody>);
       const mode = url.pathname.endsWith('/full') ? 'full' : 'incremental';
       const job = await options.service.enqueueSyncJob(sourceKey, mode);
+      if (body.warmup?.enabled === true) {
+        options.onWarmupRequested?.({
+          syncJobId: job.jobId,
+          sourceKey,
+          warmup: {
+            enabled: true,
+            mode: isWarmupMode(body.warmup.mode) ? body.warmup.mode : 'incremental',
+            startDate: body.warmup.startDate?.trim() || undefined,
+            endDate: body.warmup.endDate?.trim() || undefined,
+          },
+        });
+      }
       options.onSyncJobCreated?.(job.jobId, sourceKey);
       return jsonResponse(toSyncJobResponse(job), 202);
     }
@@ -49,6 +80,10 @@ export async function handleReviewSyncRequest(request: Request, options: ReviewS
     }
     throw cause;
   }
+}
+
+function isWarmupMode(mode: unknown): mode is WarmupMode {
+  return mode === 'bootstrap' || mode === 'incremental';
 }
 
 function toSyncJobResponse(job: ReviewSyncJob): Record<string, unknown> {
