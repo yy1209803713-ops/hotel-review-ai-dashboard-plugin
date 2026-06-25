@@ -139,14 +139,13 @@ function mappingsToGroups(mappings: TopicMappingItem[], candidates: TopicMergeCa
     const candidate =
       (mapping.candidateId ? candidateById.get(mapping.candidateId) : undefined) ??
       candidateByKey.get(`${mapping.sentiment}|${normalizeTopic(mapping.sourceLabel)}`);
-    if (!candidate) {
-      continue;
-    }
     const groupKey = `${mapping.sentiment}|${normalizeTopic(mapping.mergeKey || mapping.displayTopic)}`;
     const member = {
-      candidateId: candidate.id,
-      sourceLabel: candidate.sourceLabel,
-      acceptedQuotes: mapping.acceptedQuotes?.filter((quote) => candidate.quotes.includes(quote)),
+      candidateId: candidate?.id ?? mapping.candidateId,
+      sourceLabel: candidate?.sourceLabel ?? mapping.sourceLabel,
+      acceptedQuotes: candidate
+        ? mapping.acceptedQuotes?.filter((quote) => candidate.quotes.includes(quote))
+        : mapping.acceptedQuotes,
     };
     const current = groupsByKey.get(groupKey);
     if (!current) {
@@ -431,6 +430,7 @@ export async function mergeEvidenceTopics(params: {
   config: AiConfig;
   candidates: TopicMergeCandidate[];
   topN: number;
+  previousErrorMessage?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TopicMergeResult> {
@@ -465,7 +465,7 @@ export async function mergeEvidenceTopics(params: {
           },
           {
             role: 'user',
-            content: buildTopicMergePrompt(candidates, params.topN),
+            content: buildTopicMergePrompt(candidates, params.topN, params.previousErrorMessage),
           },
         ],
       }),
@@ -634,29 +634,36 @@ function buildBatchPrompt(records: ReviewRecord[]): string {
   });
 }
 
-function buildTopicMergePrompt(candidates: TopicMergeCandidate[], topN: number): string {
+function buildTopicMergePrompt(
+  candidates: TopicMergeCandidate[],
+  topN: number,
+  previousErrorMessage?: string,
+): string {
   return JSON.stringify({
     task:
-      '对已验证的评论证据做全量主题归并。优先输出 topicGroups + assignments。topicGroups 描述最终主题组，assignments 只负责把每个 candidate 分配到某个 groupId。程序会在本地按 groupId 合并成主题；这一步不是筛选 TopN，不能因为某个候选重要性低就省略，TopN 只由程序后续排序截断。',
+      '对已验证的评论证据生成第二层主题映射。只输出 mappings；每个 candidate 必须且只能生成一条 mapping。程序会在本地按 mergeKey 合并成最终主题；这一步不是筛选 TopN，不能因为某个候选重要性低就省略，TopN 只由程序后续排序截断。',
     rules: [
       '这是通用评论分析，不要假设一定是酒店、电商或餐饮；根据输入 quote 自身判断。',
       'sentiment 只能是 positive 或 negative，其他一律不允许；禁止返回 mixed、neutral、both、ambivalent。',
       '混合证据按主导方向归类；混合评论必须拆成 positive group 或 negative group，不允许输出 mixed group。',
-      'topicGroups 里的 groupId 只做内部关联键，简短且稳定，例如 g1、g2、g3。不要把 groupId 设计成长文本。',
-      'topicGroups 里的 category 是上位类目，只回答属于哪类，例如：服务、卫生、位置、设施、餐饮、房型、价格/性价比、交通、回复/售后、其他。',
-      'topicGroups 里的 mergeKey 是内部归并键，只用于把相近 candidate 合到同一组，例如：服务态度、房间卫生、出行位置；mergeKey 不直接展示给用户。',
-      `topicGroups 里的 displayTopic 是后续 Top ${topN} 排行可能展示的标题，必须是自然短句，像人在复盘评论时会说的话。`,
+      '只返回 mappings 字段，不要返回 topicGroups、assignments 或 groups。',
+      'mappings 里的 category 是上位类目，只回答属于哪类，例如：服务、卫生、位置、设施、餐饮、房型、价格/性价比、交通、回复/售后、其他。',
+      'mappings 里的 mergeKey 是内部归并键，只用于把相近 candidate 合到同一组，例如：服务态度、房间卫生、出行位置；mergeKey 不直接展示给用户。',
+      `mappings 里的 displayTopic 是后续 Top ${topN} 排行可能展示的标题，必须是自然短句，像人在复盘评论时会说的话。`,
       'displayTopic 绝对不能写成“服务/环境/卫生/设施/位置/餐饮/房型/交通/其他/service”这类上位类目，也不能照抄 category；要根据证据归纳，正向、负向和改进建议都要自然具体。',
       'displayTopic 不要使用四字成语、四字口号或生硬标签；优先写成 6-14 个中文字左右的自然短句。',
-      'assignments 只需要把 candidate 指到某个 groupId；每个输入 candidate 的 id 必须且只能出现在一个 assignments 里，不能漏掉、不能重复、不能返回输入里不存在的 id。',
-      'assignments.length 必须等于 candidateIds.length；输出前逐一核对 candidateIds，确认每个 candidateId 都在 assignments 中出现一次。',
-      '同一个 groupId 只能接收同一种 sentiment 的 candidates；positive candidate 必须分配到 positive topicGroup，negative candidate 必须分配到 negative topicGroup，绝不能混放。',
-      'assignment 有 candidateId 时只输出 candidateId 和 groupId 即可，不要重复 sourceLabel 或 sentiment；只有无法使用 candidateId 时才输出 sourceLabel/sentiment。',
-      '如果某个 candidate 没有任何 quote 匹配该主题，assignment 仍必须存在，但 acceptedQuotes 可以省略。',
+      'mappings.length 必须等于 candidateIds.length；输出前逐一核对 candidateIds，确认每个 candidateId 都在 mappings 中出现一次。',
+      '每个输入 candidate 的 id 必须且只能出现在一条 mapping 里，不能漏掉、不能重复、不能返回输入里不存在的 id。',
+      '每条 mapping 的 sourceLabel 必须等于对应 candidate.sourceLabel，sentiment 必须等于对应 candidate.sentiment。',
+      'positive candidate 必须生成 positive mapping，negative candidate 必须生成 negative mapping，绝不能串组。',
+      '如果某个 candidate 没有任何 quote 匹配该主题，mapping 仍必须存在，但 acceptedQuotes 可以省略。',
       '即使某个 candidate 看起来像弱负面、低重要性或不适合 TopN，也必须分配到最接近的同 sentiment group，不能因为语义轻微就省略。',
       'summary 要用证据片段解释这个主题，action 要写成能落地的改进建议，避免“持续优化”“提升体验”这类空泛表达。',
-      '如果你更习惯旧格式，也可以返回 mappings；程序会兼容 topicGroups+assignments、mappings 或 groups，但优先返回 topicGroups+assignments。',
     ],
+    previousErrorMessage: previousErrorMessage || undefined,
+    retryInstruction: previousErrorMessage
+      ? '上一次输出没有通过程序校验。本次必须逐一核对 candidateIds，重新输出完整 mappings，不要省略、不要重复、不要返回输入之外的 candidate。'
+      : undefined,
     fieldExamples: [
       {
         category: '服务',
@@ -685,24 +692,17 @@ function buildTopicMergePrompt(candidates: TopicMergeCandidate[], topN: number):
       avoid: ['黄金地段', '洁净如初', '宾至如归', '设施完善'],
     },
     jsonContract: {
-      topicGroups: [
+      mappings: [
         {
-          groupId: 'string，简短稳定的内部归并组 ID，例如 g1',
-          sentiment: 'positive 或 negative，其他一律不允许',
+          candidateId: 'string，必须等于输入 candidate.id',
+          sourceLabel: 'string，必须等于输入 candidate.sourceLabel',
+          sentiment: 'positive 或 negative，必须等于输入 candidate.sentiment',
           mergeKey: 'string，内部归并键，不直接展示',
           category: 'string，上位类目，例如 服务/卫生/位置',
           displayTopic: 'string，最终榜单展示标题，不能是单个类目词',
           summary: 'string，主题总结',
-          action: 'string，可选，negative 主题的建议动作',
-        },
-      ],
-      assignments: [
-        {
-          candidateId: 'string，可选但推荐，必须等于输入 candidate.id',
-          sourceLabel: 'string，可选，但当不填 candidateId 时用于识别候选',
-          sentiment: 'positive 或 negative，可选但建议与 candidate 一致',
-          groupId: 'string，必须等于某个 topicGroups.groupId',
           acceptedQuotes: ['string，可选；只在需要过滤 quote 时返回，只能来自对应 candidate.quotes'],
+          action: 'string，可选，negative 主题的建议动作',
         },
       ],
     },

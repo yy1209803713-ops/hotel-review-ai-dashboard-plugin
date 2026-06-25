@@ -682,6 +682,88 @@ describe('runAnalysis', () => {
     }
   });
 
+  it('retries invalid topic mapping output once with the validation error before saving mappings', async () => {
+    const mergeCalls: Array<{
+      candidates: TopicMergeCandidate[];
+      previousErrorMessage?: string;
+    }> = [];
+    const savedMappings: TopicMergeGroup[][] = [];
+
+    const result = await runAnalysis({
+      records: makeRecordsForEvidence([
+        ['rec1', '服务热情。', 5],
+        ['rec2', '位置很好。', 5],
+      ]),
+      config: { ...config, maxBatchSize: 10, topN: 10 },
+      filters,
+      fields,
+      now: '2026-06-03T12:00:00+08:00',
+      analyzeBatchImpl: async () => ({
+        evidenceItems: [
+          evidence('rec1', '服务热情', 'positive', '服务态度'),
+          evidence('rec2', '位置很好', 'positive', '位置便利'),
+        ],
+      }),
+      onTopicMappingUsage: (usage) => {
+        savedMappings.push(usage.newGroups);
+      },
+      mergeTopicsImpl: async ({ candidates, previousErrorMessage }) => {
+        mergeCalls.push({ candidates, previousErrorMessage });
+        if (!previousErrorMessage) {
+          return {
+            groups: [
+              {
+                mergeKey: '服务体验',
+                sentiment: 'positive',
+                category: '服务',
+                displayTopic: '服务热情，沟通顺畅',
+                summary: '客人认可服务。',
+                members: [
+                  {
+                    candidateId: candidates[0].id,
+                    sourceLabel: candidates[0].sourceLabel,
+                    acceptedQuotes: candidates[0].quotes,
+                  },
+                ],
+              },
+            ],
+          };
+        }
+
+        return {
+          groups: candidates.map((candidate) => ({
+            mergeKey: candidate.sourceLabel,
+            sentiment: candidate.sentiment,
+            category: candidate.sourceLabel.includes('服务') ? '服务' : '位置',
+            displayTopic: candidate.sourceLabel.includes('服务') ? '服务热情，沟通顺畅' : '位置方便，出行省心',
+            summary: `${candidate.sourceLabel}相关评论证据。`,
+            members: [
+              {
+                candidateId: candidate.id,
+                sourceLabel: candidate.sourceLabel,
+                acceptedQuotes: candidate.quotes,
+              },
+            ],
+          })),
+        };
+      },
+    });
+
+    expect(mergeCalls).toHaveLength(2);
+    expect(mergeCalls[0].previousErrorMessage).toBeUndefined();
+    expect(mergeCalls[1].previousErrorMessage).toContain('好评主题合并结果无效：AI 主题归并漏掉候选标签');
+    expect(mergeCalls[1].candidates.map((candidate) => candidate.sourceLabel)).toEqual(['服务态度', '位置便利']);
+    expect(savedMappings).toHaveLength(1);
+    expect(savedMappings[0].flatMap((group) => group.members.map((member) => member.sourceLabel))).toEqual([
+      '服务态度',
+      '位置便利',
+    ]);
+    expect(result.positiveTopics.map((topic) => topic.displayTopic).sort()).toEqual([
+      '服务热情，沟通顺畅',
+      '位置方便，出行省心',
+    ].sort());
+  });
+
   it('rejects duplicate candidate coverage even when one member uses candidateId and another uses sourceLabel', async () => {
     await expect(
       runAnalysis({
@@ -838,7 +920,13 @@ describe('runAnalysis', () => {
       '早餐体验',
       '位置体验',
     ]);
-    expect(mergeCalls).toHaveLength(1);
+    expect(mergeCalls).toHaveLength(2);
+    expect(mergeCalls[1].map((candidate) => candidate.sourceLabel)).toEqual([
+      '床品体验',
+      '服务体验',
+      '早餐体验',
+      '位置体验',
+    ]);
   });
 
   it('logs invalid topic merge diagnostics before rejecting unknown candidate labels', async () => {

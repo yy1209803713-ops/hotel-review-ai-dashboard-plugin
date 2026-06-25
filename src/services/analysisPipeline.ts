@@ -26,6 +26,7 @@ export type MergeTopicsImpl = (params: {
   config: AiConfig;
   candidates: TopicMergeCandidate[];
   topN: number;
+  previousErrorMessage?: string;
 }) => Promise<TopicMergeResult>;
 
 export type AnalysisCacheUsage = {
@@ -543,12 +544,13 @@ async function mergeCandidateTopicsBySentiment(params: {
 
   if (mergeInputs.length) {
     const mergedGroups = await Promise.all(mergeInputs.map(async (candidates) => {
-      const result = await params.mergeTopics({
+      const result = await mergeTopicsWithCoverageRetry({
         config: params.config,
         candidates,
         topN: params.topN,
+        mergeTopics: params.mergeTopics,
+        context: describeTopicMergeContext(candidates),
       });
-      ensureMergeResultCoversCandidates(candidates, result.groups, describeTopicMergeContext(candidates));
       return hydrateAcceptedQuotes(candidates, result.groups);
     }));
 
@@ -573,6 +575,36 @@ async function mergeCandidateTopicsBySentiment(params: {
       groupCount: groups.length,
     },
   };
+}
+
+async function mergeTopicsWithCoverageRetry(params: {
+  config: AiConfig;
+  candidates: TopicMergeCandidate[];
+  topN: number;
+  mergeTopics: MergeTopicsImpl;
+  context: string;
+}): Promise<TopicMergeResult> {
+  const firstResult = await params.mergeTopics({
+    config: params.config,
+    candidates: params.candidates,
+    topN: params.topN,
+  });
+  try {
+    ensureMergeResultCoversCandidates(params.candidates, firstResult.groups, params.context);
+    return firstResult;
+  } catch (cause) {
+    if (!(cause instanceof InvalidTopicMergeCoverageError)) {
+      throw cause;
+    }
+    const retryResult = await params.mergeTopics({
+      config: params.config,
+      candidates: params.candidates,
+      topN: params.topN,
+      previousErrorMessage: cause.message,
+    });
+    ensureMergeResultCoversCandidates(params.candidates, retryResult.groups, params.context);
+    return retryResult;
+  }
 }
 
 function splitCandidatesBySentiment(candidates: TopicMergeCandidate[]): TopicMergeCandidate[][] {

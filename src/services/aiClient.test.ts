@@ -408,15 +408,14 @@ describe('analyzeBatch', () => {
     expect(prompt).toContain('sentiment 只能是 positive 或 negative，其他一律不允许');
     expect(prompt).toContain('禁止返回 mixed、neutral、both、ambivalent');
     expect(prompt).toContain('混合证据按主导方向归类');
-    expect(prompt).toContain('topicGroups + assignments');
-    expect(prompt).toContain('优先返回 topicGroups+assignments');
-    expect(prompt).toContain('assignments');
-    expect(prompt).toContain('assignments.length 必须等于 candidateIds.length');
+    expect(prompt).toContain('只输出 mappings');
+    expect(prompt).toContain('mappings.length 必须等于 candidateIds.length');
     expect(prompt).toContain('输出前逐一核对 candidateIds');
     expect(prompt).toContain('即使某个 candidate 看起来像弱负面');
-    expect(prompt).toContain('positive candidate 必须分配到 positive topicGroup');
-    expect(prompt).toContain('negative candidate 必须分配到 negative topicGroup');
+    expect(prompt).toContain('positive candidate 必须生成 positive mapping');
+    expect(prompt).toContain('negative candidate 必须生成 negative mapping');
     expect(prompt).not.toContain('请输出 groups');
+    expect(prompt).not.toContain('优先返回 topicGroups+assignments');
     expect(prompt).toContain('地理位置好，出行方便');
     expect(prompt).toContain('卫生做得很好，打扫得很及时');
   });
@@ -568,6 +567,77 @@ describe('analyzeBatch', () => {
         ],
       },
     ]);
+  });
+
+  it('asks the model for one mapping per candidate and includes retry feedback when provided', async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  mappings: [
+                    {
+                      candidateId: 'c001',
+                      sourceLabel: '服务态度',
+                      sentiment: 'positive',
+                      mergeKey: '服务态度',
+                      category: '服务',
+                      displayTopic: '服务热情，沟通顺畅',
+                      summary: '客人认可服务。',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    await mergeEvidenceTopics({
+      config,
+      topN: 10,
+      candidates: [
+        {
+          id: 'c001',
+          sourceLabel: '服务态度',
+          sentiment: 'positive',
+          count: 1,
+          quotes: ['服务热情'],
+        },
+      ],
+      previousErrorMessage: '好评主题合并结果无效：AI 主题归并漏掉候选标签：positive|服务态度',
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const requestBody = JSON.parse(String(init.body));
+    const systemMessage = requestBody.messages[0].content as string;
+    const prompt = JSON.parse(requestBody.messages[1].content as string);
+
+    expect(systemMessage).toContain('为每个 candidate 生成一条 mapping');
+    expect(prompt.task).toContain('只输出 mappings');
+    expect(prompt.rules.join('\n')).toContain('mappings.length 必须等于 candidateIds.length');
+    expect(prompt.rules.join('\n')).not.toContain('优先输出 topicGroups + assignments');
+    expect(prompt.previousErrorMessage).toBe('好评主题合并结果无效：AI 主题归并漏掉候选标签：positive|服务态度');
+    expect(prompt.jsonContract).toEqual({
+      mappings: [
+        {
+          candidateId: 'string，必须等于输入 candidate.id',
+          sourceLabel: 'string，必须等于输入 candidate.sourceLabel',
+          sentiment: 'positive 或 negative，必须等于输入 candidate.sentiment',
+          mergeKey: 'string，内部归并键，不直接展示',
+          category: 'string，上位类目，例如 服务/卫生/位置',
+          displayTopic: 'string，最终榜单展示标题，不能是单个类目词',
+          summary: 'string，主题总结',
+          acceptedQuotes: ['string，可选；只在需要过滤 quote 时返回，只能来自对应 candidate.quotes'],
+          action: 'string，可选，negative 主题的建议动作',
+        },
+      ],
+    });
   });
 
   it('accepts compact topic groups and assignment mappings to reduce model output size', async () => {
