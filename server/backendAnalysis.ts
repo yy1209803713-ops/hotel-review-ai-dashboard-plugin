@@ -158,7 +158,20 @@ export type TopicEvidence = {
   evidenceId: string;
   recordId?: string;
   quote?: string;
+  quotes?: string[];
   sentiment?: string;
+  review?: {
+    recordId: string;
+    reviewId: string;
+    hotelName: string;
+    score: number | null;
+    reviewDate: string | null;
+    checkInMonth: string | null;
+    roomType: string | null;
+    hasReply: boolean;
+    replyContent: string | null;
+    content: string;
+  };
   [key: string]: JsonValue | undefined;
 };
 
@@ -487,17 +500,41 @@ export function createInMemoryAnalysisBackendStore(): AnalysisBackendStore {
       if (!evidence) {
         return undefined;
       }
+      const mergedEvidence = mergeTopicEvidenceByRecord(evidence);
       const start = (input.page - 1) * input.pageSize;
       return {
         resultId: input.resultId,
         topicId: input.topicId,
         page: input.page,
         pageSize: input.pageSize,
-        total: evidence.length,
-        evidence: deepClone(evidence.slice(start, start + input.pageSize)),
+        total: mergedEvidence.length,
+        evidence: deepClone(mergedEvidence.slice(start, start + input.pageSize)),
       };
     },
   };
+}
+
+export function mergeTopicEvidenceByRecord(evidence: TopicEvidence[]): TopicEvidence[] {
+  const merged = new Map<string, TopicEvidence>();
+
+  for (const item of evidence) {
+    const key = item.recordId ?? item.review?.recordId ?? item.evidenceId;
+    const quote = item.quote?.trim();
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, {
+        ...item,
+        quotes: quote ? [quote] : [],
+      });
+      continue;
+    }
+
+    if (quote && !current.quotes?.includes(quote)) {
+      current.quotes = [...(current.quotes ?? []), quote];
+    }
+  }
+
+  return [...merged.values()];
 }
 
 export class AnalysisBackendService {

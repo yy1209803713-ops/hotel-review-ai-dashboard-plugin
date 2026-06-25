@@ -446,6 +446,7 @@ describe('AnalysisBackendService', () => {
       evidenceByTopic: {
         'topic-cleanliness': [
           { evidenceId: 'ev-1', recordId: 'rec-1', quote: 'Room was clean', sentiment: 'positive' },
+          { evidenceId: 'ev-1b', recordId: 'rec-1', quote: 'Bed was tidy', sentiment: 'positive' },
           { evidenceId: 'ev-2', recordId: 'rec-2', quote: 'Bathroom was spotless', sentiment: 'positive' },
         ],
       },
@@ -493,7 +494,38 @@ describe('AnalysisBackendService', () => {
       page: 2,
       pageSize: 1,
       total: 2,
-      evidence: [{ evidenceId: 'ev-2', recordId: 'rec-2', quote: 'Bathroom was spotless', sentiment: 'positive' }],
+      evidence: [{
+        evidenceId: 'ev-2',
+        recordId: 'rec-2',
+        quote: 'Bathroom was spotless',
+        quotes: ['Bathroom was spotless'],
+        sentiment: 'positive',
+      }],
+    });
+    await expect(
+      service.getTopicEvidence({
+        tenantKey: 'tenant-a',
+        baseUserId: 'user-a',
+        pluginInstanceId: 'plugin-a',
+        scopeKey: job.scopeKey,
+        resultId: latest.resultId,
+        topicId: 'topic-cleanliness',
+        page: 1,
+        pageSize: 1,
+      }),
+    ).resolves.toEqual({
+      resultId: latest.resultId,
+      topicId: 'topic-cleanliness',
+      page: 1,
+      pageSize: 1,
+      total: 2,
+      evidence: [{
+        evidenceId: 'ev-1',
+        recordId: 'rec-1',
+        quote: 'Room was clean',
+        quotes: ['Room was clean', 'Bed was tidy'],
+        sentiment: 'positive',
+      }],
     });
   });
 

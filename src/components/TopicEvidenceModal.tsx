@@ -1,6 +1,5 @@
 import { Modal, Pagination } from '@douyinfe/semi-ui';
 import type { ReactNode } from 'react';
-import { extractEvidenceSnippet } from '../services/evidenceSnippet';
 import type { ReviewRecord, TopicSummary } from '../types/analysis';
 
 export function TopicEvidenceModal(props: {
@@ -86,7 +85,7 @@ function EvidenceTitle({ topic, total }: { topic: TopicSummary; total: number })
 
 function EvidenceRecordItem({ index, record, topic }: { index: number; record: ReviewRecord; topic: TopicSummary }) {
   const phrases = evidencePhrasesForRecord(topic, record.recordId);
-  const snippet = extractEvidenceSnippet(record.content, phrases);
+  const phrase = phrases.find((item) => item && record.content.includes(item)) ?? null;
 
   return (
     <article className="evidence-record">
@@ -101,8 +100,8 @@ function EvidenceRecordItem({ index, record, topic }: { index: number; record: R
         <span>{record.roomType ?? '未知房型'}</span>
         <span>{record.hasReply ? '已回复' : '未回复'}</span>
       </div>
-      <p className={snippet.hasMatch ? 'evidence-snippet' : 'evidence-snippet missing-match'}>
-        {renderHighlightedSnippet(snippet.text, snippet.phrase)}
+      <p className={phrase ? 'evidence-snippet' : 'evidence-snippet missing-match'}>
+        {renderHighlightedSnippet(record.content, phrase)}
       </p>
     </article>
   );

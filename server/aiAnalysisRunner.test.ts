@@ -101,7 +101,15 @@ describe('createAiAnalysisRunner', () => {
     });
     expect(result.topics).toHaveLength(2);
     expect(result.evidenceByTopic).toMatchObject({
-      位置: [expect.objectContaining({ recordId: 'rec-positive', sentiment: 'positive' })],
+      位置: [
+        expect.objectContaining({
+          recordId: 'rec-positive',
+          sentiment: 'positive',
+          review: expect.objectContaining({
+            content: '酒店位置非常方便，步行到景点很近。',
+          }),
+        }),
+      ],
       噪音: [expect.objectContaining({ recordId: 'rec-negative', sentiment: 'negative' })],
     });
   });

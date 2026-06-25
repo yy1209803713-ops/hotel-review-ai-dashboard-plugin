@@ -1,4 +1,5 @@
 import {
+  mergeTopicEvidenceByRecord,
   type AnalysisBackendStore,
   type AnalysisJob,
   type AnalysisJobStatus,
@@ -297,31 +298,25 @@ export function createPostgresAnalysisBackendStore(client: PostgresQueryClient):
         return undefined;
       }
 
-      const offset = (input.page - 1) * input.pageSize;
-      const [{ rows: countRows }, { rows }] = await Promise.all([
-        client.query<{ count: string }>(
-          `select count(*)::text as count from analysis_topic_evidence where result_id = $1 and topic_id = $2`,
-          [input.resultId, input.topicId],
-        ),
-        client.query<AnalysisTopicEvidenceRow>(
-          `select * from analysis_topic_evidence
-          where result_id = $1 and topic_id = $2
-          order by evidence_index asc
-          limit $3 offset $4`,
-          [input.resultId, input.topicId, input.pageSize, offset],
-        ),
-      ]);
-      const total = Number(countRows[0]?.count ?? 0);
+      const { rows } = await client.query<AnalysisTopicEvidenceRow>(
+        `select * from analysis_topic_evidence
+        where result_id = $1 and topic_id = $2
+        order by evidence_index asc`,
+        [input.resultId, input.topicId],
+      );
+      const mergedEvidence = mergeTopicEvidenceByRecord(rows.map((row) => parseJson(row.evidence_json) as TopicEvidence));
+      const total = mergedEvidence.length;
       if (total === 0) {
         return undefined;
       }
+      const offset = (input.page - 1) * input.pageSize;
       return {
         resultId: input.resultId,
         topicId: input.topicId,
         page: input.page,
         pageSize: input.pageSize,
         total,
-        evidence: rows.map((row) => parseJson(row.evidence_json) as TopicEvidence),
+        evidence: mergedEvidence.slice(offset, offset + input.pageSize),
       };
     },
   };

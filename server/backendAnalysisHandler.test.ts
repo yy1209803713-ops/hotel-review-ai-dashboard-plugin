@@ -136,7 +136,24 @@ describe('handleBackendAnalysisRequest', () => {
       summary: { totalReviews: 1 },
       topics: [{ topicId: 'topic-location', label: 'Location' }],
       evidenceByTopic: {
-        'topic-location': [{ evidenceId: 'ev-1', recordId: 'rec-1', quote: 'Great location', sentiment: 'positive' }],
+        'topic-location': [{
+          evidenceId: 'ev-1',
+          recordId: 'rec-1',
+          quote: 'Great location',
+          sentiment: 'positive',
+          review: {
+            recordId: 'rec-1',
+            reviewId: 'review-1',
+            hotelName: '昆明中维翠湖宾馆',
+            score: 4.8,
+            reviewDate: '2026-06-20',
+            checkInMonth: '2026-06',
+            roomType: '商务城景大床房',
+            hasReply: true,
+            replyContent: '感谢认可',
+            content: 'Great location and helpful staff. Full original comment should be visible.',
+          },
+        }],
       },
     });
 
@@ -172,7 +189,18 @@ describe('handleBackendAnalysisRequest', () => {
     expect(latest.status).toBe(200);
     await expect(latest.json()).resolves.toMatchObject({ resultId: result.resultId });
     expect(evidence.status).toBe(200);
-    await expect(evidence.json()).resolves.toMatchObject({ total: 1, evidence: [{ evidenceId: 'ev-1' }] });
+    await expect(evidence.json()).resolves.toMatchObject({
+      total: 1,
+      evidence: [{
+        evidenceId: 'ev-1',
+        review: {
+          hotelName: '昆明中维翠湖宾馆',
+          score: 4.8,
+          roomType: '商务城景大床房',
+          content: 'Great location and helpful staff. Full original comment should be visible.',
+        },
+      }],
+    });
   });
 
   it('exports a published result summary through the explicit Base export endpoint', async () => {

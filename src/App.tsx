@@ -36,6 +36,8 @@ type TopicEvidencePage = {
     evidenceId?: string;
     recordId?: string;
     quote?: string;
+    quotes?: string[];
+    review?: Partial<ReviewRecord>;
   }>;
   page: number;
 };
@@ -1153,18 +1155,21 @@ function sleep(ms: number): Promise<void> {
 }
 
 function topicEvidenceToReviewRecords(page: TopicEvidencePage): ReviewRecord[] {
-  return page.evidence.map((item, index) => ({
-    recordId: item.recordId || item.evidenceId || `evidence-${page.page}-${index}`,
-    reviewId: item.recordId || item.evidenceId || `evidence-${page.page}-${index}`,
-    hotelName: '',
-    score: null,
-    reviewDate: null,
-    checkInMonth: null,
-    roomType: null,
-    hasReply: false,
-    replyContent: null,
-    content: item.quote || '',
-  }));
+  return page.evidence.map((item, index) => {
+    const stableId = item.recordId || item.evidenceId || `evidence-${page.page}-${index}`;
+    return {
+      recordId: item.review?.recordId ?? stableId,
+      reviewId: item.review?.reviewId ?? stableId,
+      hotelName: item.review?.hotelName ?? '',
+      score: item.review?.score ?? null,
+      reviewDate: item.review?.reviewDate ?? null,
+      checkInMonth: item.review?.checkInMonth ?? null,
+      roomType: item.review?.roomType ?? null,
+      hasReply: item.review?.hasReply ?? false,
+      replyContent: item.review?.replyContent ?? null,
+      content: item.review?.content ?? item.quote ?? '',
+    };
+  });
 }
 
 function formatBackendAnalysisError(cause: unknown): string {

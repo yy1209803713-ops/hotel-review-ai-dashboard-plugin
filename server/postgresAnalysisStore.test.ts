@@ -194,6 +194,7 @@ describeWithDatabase('createPostgresAnalysisBackendStore', () => {
       await store.saveEvidence(result.resultId, {
         'topic-clean': [
           { evidenceId: 'ev-1', recordId: 'rec-1', quote: '房间很干净', sentiment: 'positive' },
+          { evidenceId: 'ev-1b', recordId: 'rec-1', quote: '床品整洁', sentiment: 'positive' },
           { evidenceId: 'ev-2', recordId: 'rec-2', quote: '卫生不错', sentiment: 'positive' },
         ],
       });
@@ -227,16 +228,47 @@ describeWithDatabase('createPostgresAnalysisBackendStore', () => {
           resultId: result.resultId,
           topicId: 'topic-clean',
           page: 2,
-          pageSize: 1,
-        }),
-      ).resolves.toEqual({
+        pageSize: 1,
+      }),
+    ).resolves.toEqual({
+      resultId: result.resultId,
+      topicId: 'topic-clean',
+      page: 2,
+      pageSize: 1,
+      total: 2,
+      evidence: [{
+        evidenceId: 'ev-2',
+        recordId: 'rec-2',
+        quote: '卫生不错',
+        quotes: ['卫生不错'],
+        sentiment: 'positive',
+      }],
+    });
+    await expect(
+      store.getTopicEvidence({
+        tenantKey: 'tenant-a',
+        baseUserId: 'user-a',
+        pluginInstanceId: 'plugin-a',
+        scopeKey: 'scope-a',
         resultId: result.resultId,
         topicId: 'topic-clean',
-        page: 2,
+        page: 1,
         pageSize: 1,
-        total: 2,
-        evidence: [{ evidenceId: 'ev-2', recordId: 'rec-2', quote: '卫生不错', sentiment: 'positive' }],
-      });
+      }),
+    ).resolves.toEqual({
+      resultId: result.resultId,
+      topicId: 'topic-clean',
+      page: 1,
+      pageSize: 1,
+      total: 2,
+      evidence: [{
+        evidenceId: 'ev-1',
+        recordId: 'rec-1',
+        quote: '房间很干净',
+        quotes: ['房间很干净', '床品整洁'],
+        sentiment: 'positive',
+      }],
+    });
     } finally {
       await adminPool.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schemaName)} CASCADE`);
       await adminPool.end();

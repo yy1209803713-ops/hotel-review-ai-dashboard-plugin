@@ -48,22 +48,57 @@ export function createAiAnalysisRunner(options: AiAnalysisRunnerOptions = {}): A
       return {
         summary: result as unknown as JsonValue,
         topics: [...result.positiveTopics, ...result.negativeTopics] as unknown as JsonValue[],
-        evidenceByTopic: Object.fromEntries(
-          [...result.positiveTopics, ...result.negativeTopics].map((topic) => [
-            topic.mergeKey,
-            (topic.evidenceItems ?? []).map((item, index) => ({
-              evidenceId: `${topic.mergeKey}-${item.recordId}-${index + 1}`,
-              recordId: item.recordId,
-              quote: item.quote,
-              sentiment: item.sentiment,
-              aspectLabel: item.aspectLabel,
-              reason: item.reason,
-            } satisfies TopicEvidence)),
-          ]),
-        ),
+        evidenceByTopic: buildEvidenceByTopic(result, filteredReviews),
       };
     },
   };
+}
+
+export function buildEvidenceByTopic(
+  result: { positiveTopics: Array<{ mergeKey: string; evidenceItems?: Array<{
+    recordId: string;
+    quote: string;
+    sentiment: string;
+    aspectLabel: string;
+    reason?: string;
+  }> }>; negativeTopics: Array<{ mergeKey: string; evidenceItems?: Array<{
+    recordId: string;
+    quote: string;
+    sentiment: string;
+    aspectLabel: string;
+    reason?: string;
+  }> }> },
+  records: PipelineReviewRecord[],
+): Record<string, TopicEvidence[]> {
+  const recordsById = new Map(records.map((record) => [record.recordId, record]));
+  return Object.fromEntries(
+    [...result.positiveTopics, ...result.negativeTopics].map((topic) => [
+      topic.mergeKey,
+      (topic.evidenceItems ?? []).map((item, index) => {
+        const record = recordsById.get(item.recordId);
+        return {
+          evidenceId: `${topic.mergeKey}-${item.recordId}-${index + 1}`,
+          recordId: item.recordId,
+          quote: item.quote,
+          sentiment: item.sentiment,
+          aspectLabel: item.aspectLabel,
+          reason: item.reason,
+          review: record ? {
+            recordId: record.recordId,
+            reviewId: record.reviewId,
+            hotelName: record.hotelName,
+            score: record.score,
+            reviewDate: record.reviewDate,
+            checkInMonth: record.checkInMonth,
+            roomType: record.roomType,
+            hasReply: record.hasReply,
+            replyContent: record.replyContent,
+            content: record.content,
+          } : undefined,
+        } satisfies TopicEvidence;
+      }),
+    ]),
+  );
 }
 
 export function readAiRuntimeConfig(env: AiRuntimeEnv): AiRuntimeConfig {

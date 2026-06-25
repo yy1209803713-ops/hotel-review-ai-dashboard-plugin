@@ -1,6 +1,6 @@
 import type { ReviewRecord, ReviewSourceQuery } from './reviewSource';
-import { BackendAnalysisError, type JsonValue, type TopicEvidence } from './backendAnalysis';
-import { readAiRuntimeConfig, type AiRuntimeEnv } from './aiAnalysisRunner';
+import { BackendAnalysisError, type JsonValue } from './backendAnalysis';
+import { buildEvidenceByTopic, readAiRuntimeConfig, type AiRuntimeEnv } from './aiAnalysisRunner';
 import { DEFAULT_CONFIG } from '../src/constants/defaults';
 import { filterReviews } from '../src/services/filtering';
 import { runAnalysis, type AnalyzeBatchImpl, type MergeTopicsImpl } from '../src/services/analysisPipeline';
@@ -170,19 +170,7 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
       return {
         summary: summaryWithDiagnostics as unknown as JsonValue,
         topics: [...result.positiveTopics, ...result.negativeTopics] as unknown as JsonValue[],
-        evidenceByTopic: Object.fromEntries(
-          [...result.positiveTopics, ...result.negativeTopics].map((topic) => [
-            topic.mergeKey,
-            (topic.evidenceItems ?? []).map((item, index) => ({
-              evidenceId: `${topic.mergeKey}-${item.recordId}-${index + 1}`,
-              recordId: item.recordId,
-              quote: item.quote,
-              sentiment: item.sentiment,
-              aspectLabel: item.aspectLabel,
-              reason: item.reason,
-            } satisfies TopicEvidence)),
-          ]),
-        ),
+        evidenceByTopic: buildEvidenceByTopic(result, filteredReviews),
       };
     },
   };
