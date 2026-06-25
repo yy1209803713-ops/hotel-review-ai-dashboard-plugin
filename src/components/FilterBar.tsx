@@ -89,7 +89,7 @@ export function FilterBar(props: {
         onChange={(value) => update({ keyword: value })}
       />
       <Button theme="solid" loading={props.loading} onClick={props.onUpdate}>
-        更新分析
+        {props.loading ? '正在分析' : '更新分析'}
       </Button>
       {props.onExportBaseSummary ? (
         <Button
@@ -101,7 +101,7 @@ export function FilterBar(props: {
           导出摘要
         </Button>
       ) : null}
-      <span className="last-run">{props.lastGeneratedAt ? `上次分析：${formatDate(props.lastGeneratedAt)}` : '尚未分析'}</span>
+      <span className="last-run">{lastRunText(props.lastGeneratedAt, props.loading)}</span>
     </div>
   );
 }
@@ -119,4 +119,14 @@ function formatDate(value: string): string {
     return value.replace('T', ' ').slice(0, 16);
   }
   return parsed.tz(TIME_ZONE).format('YYYY-MM-DD HH:mm');
+}
+
+function lastRunText(lastGeneratedAt: string | undefined, loading: boolean): string {
+  if (loading && lastGeneratedAt) {
+    return `正在更新，上次分析：${formatDate(lastGeneratedAt)}`;
+  }
+  if (loading) {
+    return '正在分析';
+  }
+  return lastGeneratedAt ? `上次分析：${formatDate(lastGeneratedAt)}` : '尚未分析';
 }

@@ -43,6 +43,7 @@ type TopicEvidencePage = {
 type DisplayInitSnapshot = {
   configWithBackend: PluginConfig;
   analysis: AnalysisResult | null;
+  activeJob: BackendAnalysisJob | null;
   currentScopeKey: string | null;
   currentResultId: string | null;
 };
@@ -100,6 +101,7 @@ export default function App() {
   const [config, setConfig] = useState<PluginConfig>(DEFAULT_CONFIG);
   const [filters, setFilters] = useState<FilterState>(() => withComputedRange(DEFAULT_CONFIG.filters));
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [analysisFilters, setAnalysisFilters] = useState<FilterState | null>(null);
   const [selectedTopic, setSelectedTopic] = useState<TopicSummary | null>(null);
   const [evidenceRecords, setEvidenceRecords] = useState<ReviewRecord[]>([]);
   const [evidencePage, setEvidencePage] = useState(1);
@@ -211,6 +213,8 @@ export default function App() {
       setDataRanges([]);
       setHostData(null);
       setAnalysis(null);
+      setAnalysisFilters(null);
+      setAnalysisRunning(false);
       setCurrentScopeKey(null);
       setCurrentResultId(null);
       setExportingSummary(false);
@@ -298,8 +302,9 @@ export default function App() {
       setFilters(withComputedRange(pluginConfig.filters));
 
       let displayConfig = pluginConfig;
+      let displayInitSnapshot: DisplayInitSnapshot | null = null;
       try {
-        const displayInitSnapshot = await getDisplayInitSnapshot(runtime, state, reloadToken, pluginConfig);
+        displayInitSnapshot = await getDisplayInitSnapshot(runtime, state, reloadToken, pluginConfig);
         if (!isCurrentInitRequest()) {
           return;
         }
@@ -310,6 +315,8 @@ export default function App() {
         setCurrentScopeKey(displayInitSnapshot.currentScopeKey);
         setCurrentResultId(displayInitSnapshot.currentResultId);
         setAnalysis(displayInitSnapshot.analysis);
+        setAnalysisFilters(displayInitSnapshot.analysis ? withComputedRange(displayConfig.filters) : null);
+        setAnalysisRunning(Boolean(displayInitSnapshot.activeJob));
       } catch (cause) {
         if (!isCurrentInitRequest()) {
           return;
@@ -321,6 +328,9 @@ export default function App() {
       configSourceRequestId.current = sourceRequestId;
       setLoading(false);
       markRenderedOnce();
+      if (displayInitSnapshot?.activeJob) {
+        void continueRestoredBackendJob(displayConfig, displayInitSnapshot.activeJob, initRequestId);
+      }
       void loadDisplayHostDataInBackground(initRequestId, sourceRequestId);
       void loadDisplayOptionRecordsInBackground(displayConfig, initRequestId, sourceRequestId);
     }
@@ -418,7 +428,7 @@ export default function App() {
     init();
   }, [state, reloadToken]);
 
-  const stale = false;
+  const stale = Boolean(analysis && analysisFilters && !isSameFilterState(filters, analysisFilters));
   const hotelOptions = useMemo(
     () => uniqueSorted(optionRecords.map((record) => record.hotelName).filter(Boolean), filters.hotelName),
     [filters.hotelName, optionRecords],
@@ -462,38 +472,32 @@ export default function App() {
     const scope = await client.resolveScope({ ...ownership, configId: upserted.configId });
     const currentJob = await client.getCurrentJob({ ...ownership, scopeKey: scope.scopeKey });
     if (currentJob && !COMPLETE_JOB_STATUSES.has(currentJob.status)) {
-      const latestSnapshot = await loadLatestBackendResult(client, ownership, currentJob.scopeKey, undefined, true);
+      const latestSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, undefined, true);
       if (latestSnapshot) {
         return {
           configWithBackend,
+          activeJob: currentJob,
           currentScopeKey: currentJob.scopeKey,
           currentResultId: latestSnapshot.resultId,
           analysis: latestSnapshot.analysis,
         };
       }
-      let completedJob: BackendAnalysisJob;
-      completedJob = await waitForBackendJob(client, ownership, currentJob, () => mountedRef.current);
-      if (completedJob.status !== 'success' || !completedJob.resultId) {
-        throw new BackendAnalysisError(
-          completedJob.errorStage ?? completedJob.stage ?? 'load_config',
-          completedJob.errorMessage ?? '后端分析任务未成功完成',
-        );
-      }
-      const completedSnapshot = await loadLatestBackendResult(client, ownership, completedJob.scopeKey, completedJob.resultId);
       return {
         configWithBackend,
-        currentScopeKey: completedJob.scopeKey,
-        currentResultId: completedJob.resultId,
-        analysis: completedSnapshot?.analysis ?? null,
+        activeJob: currentJob,
+        currentScopeKey: currentJob.scopeKey,
+        currentResultId: null,
+        analysis: null,
       };
     }
     if (currentJob?.status === 'success') {
       if (!currentJob.resultId) {
         throw new BackendAnalysisError('validate_response', '后端成功任务缺少 resultId');
       }
-      const currentSnapshot = await loadLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
+      const currentSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
       return {
         configWithBackend,
+        activeJob: null,
         currentScopeKey: currentJob.scopeKey,
         currentResultId: currentJob.resultId,
         analysis: currentSnapshot?.analysis ?? null,
@@ -506,13 +510,55 @@ export default function App() {
       );
     }
 
-    const latestSnapshot = await loadLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
+    const latestSnapshot = await fetchLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
     return {
       configWithBackend,
+      activeJob: null,
       currentScopeKey: scope.scopeKey,
       currentResultId: latestSnapshot?.resultId ?? null,
       analysis: latestSnapshot?.analysis ?? null,
     };
+  }
+
+  async function continueRestoredBackendJob(pluginConfig: PluginConfig, initialJob: BackendAnalysisJob, initRequestId: number) {
+    try {
+      const ownership = await getBackendOwnership(runtime);
+      const client = createBackendAnalysisClient({ endpointUrl: pluginConfig.backend.endpointUrl });
+      const completedJob = await waitForBackendJob(
+        client,
+        ownership,
+        initialJob,
+        () => mountedRef.current && initRequestRef.current === initRequestId,
+      );
+      if (!mountedRef.current || initRequestRef.current !== initRequestId) {
+        return;
+      }
+      if (completedJob.status !== 'success' || !completedJob.resultId) {
+        throw new BackendAnalysisError(
+          completedJob.errorStage ?? completedJob.stage ?? 'load_config',
+          completedJob.errorMessage ?? '后端分析任务未成功完成',
+        );
+      }
+      await loadLatestBackendResult(
+        client,
+        ownership,
+        completedJob.scopeKey,
+        completedJob.resultId,
+        false,
+        pluginConfig.filters,
+      );
+    } catch (cause) {
+      if (mountedRef.current && initRequestRef.current === initRequestId) {
+        const message = formatBackendAnalysisError(cause);
+        setError(message);
+        Toast.error(`恢复后端分析任务失败：${message}`);
+      }
+    } finally {
+      if (mountedRef.current && initRequestRef.current === initRequestId) {
+        setAnalysisRunning(false);
+        runtime.setRendered();
+      }
+    }
   }
 
   async function handleUpdateAnalysis() {
@@ -544,6 +590,13 @@ export default function App() {
 
     setLoading(true);
     setAnalysisRunning(true);
+    setAnalysis(null);
+    setAnalysisFilters(null);
+    setSelectedTopic(null);
+    setEvidenceRecords([]);
+    setEvidencePage(1);
+    setCurrentScopeKey(null);
+    setCurrentResultId(null);
     Toast.info('已提交后端分析任务');
     console.info(
       '__HOTEL_REVIEW_AI_FRONTEND_ANALYSIS_REQUEST__',
@@ -633,6 +686,35 @@ export default function App() {
     scopeKey: string,
     expectedResultId?: string,
     ignoreNotFound = false,
+    filtersForResult: FilterState = configRef.current.filters,
+  ): Promise<BackendResultSnapshot | null> {
+    try {
+      const snapshot = await fetchLatestBackendResult(client, ownership, scopeKey, expectedResultId, ignoreNotFound);
+      if (!snapshot) {
+        return null;
+      }
+      setCurrentScopeKey(scopeKey);
+      setCurrentResultId(snapshot.resultId);
+      setAnalysis(snapshot.analysis);
+      setAnalysisFilters(withComputedRange(filtersForResult));
+      setSelectedTopic(null);
+      setEvidenceRecords([]);
+      setEvidencePage(1);
+      return snapshot;
+    } catch (cause) {
+      if (ignoreNotFound && cause instanceof BackendAnalysisError && cause.status === 404) {
+        return null;
+      }
+      throw cause;
+    }
+  }
+
+  async function fetchLatestBackendResult(
+    client: BackendAnalysisClient,
+    ownership: BackendOwnership,
+    scopeKey: string,
+    expectedResultId?: string,
+    ignoreNotFound = false,
   ): Promise<BackendResultSnapshot | null> {
     try {
       const latest = await client.getLatestResult({ ...ownership, scopeKey });
@@ -651,12 +733,6 @@ export default function App() {
           actionItems: result.actionItems.length,
         }),
       );
-      setCurrentScopeKey(scopeKey);
-      setCurrentResultId(latest.resultId);
-      setAnalysis(result);
-      setSelectedTopic(null);
-      setEvidenceRecords([]);
-      setEvidencePage(1);
       return {
         analysis: result,
         resultId: latest.resultId,
@@ -900,15 +976,6 @@ export default function App() {
     configRef.current = nextConfig;
     setFilters(nextFilters);
     setConfig(nextConfig);
-    setCurrentScopeKey(null);
-    setCurrentResultId(null);
-    if (!isConfigMode && !loading && !saving) {
-      savePluginConfig(runtime, nextConfig).catch((cause) => {
-        const message = cause instanceof Error ? cause.message : '保存筛选配置失败';
-        setError(message);
-        Toast.error(message);
-      });
-    }
   }
 
   function handlePeriodChange(periodType: PeriodType) {
@@ -942,7 +1009,6 @@ export default function App() {
       onFilterChange={handleFilterChange}
       onPeriodChange={handlePeriodChange}
       onUpdate={handleUpdateAnalysis}
-      onExportBaseSummary={handleExportBaseSummary}
       onSelectTopic={handleSelectTopic}
       onEvidencePageChange={handleEvidencePageChange}
       onCloseTopic={handleCloseTopic}
@@ -1225,6 +1291,10 @@ function isSameDataRange(left?: IDataRange, right?: IDataRange): boolean {
 
 function isSameFieldMapping(left: FieldMapping, right: FieldMapping): boolean {
   return Object.keys(left).every((key) => left[key as keyof FieldMapping] === right[key as keyof FieldMapping]);
+}
+
+function isSameFilterState(left: FilterState, right: FilterState): boolean {
+  return JSON.stringify(withComputedRange(left)) === JSON.stringify(withComputedRange(right));
 }
 
 function hasFilterOptionRequiredFields(fields: FieldMapping): boolean {

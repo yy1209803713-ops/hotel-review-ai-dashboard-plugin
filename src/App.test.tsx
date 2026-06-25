@@ -472,10 +472,17 @@ describe('App initialization', () => {
   });
 
   it('does not expose browser warmup controls from the Config panel', async () => {
-    const savedConfig = withSource({
-      tableId: 'tbl1',
-      fields: optionFieldMapping('a'),
-    });
+    const savedConfig = {
+      ...withSource({
+        tableId: 'tbl1',
+        fields: optionFieldMapping('a'),
+      }),
+      backend: {
+        endpointUrl: 'https://backend.example.com',
+        baseToken: 'base-token',
+        configId: 'config-1',
+      },
+    };
     const runtime = fakeRuntime({
       getState: () => 'Config',
       getConfig: vi.fn(async () => ({
@@ -506,11 +513,98 @@ describe('App initialization', () => {
     expect(screen.queryByLabelText('hotel-review-ai-warmup-secret')).not.toBeInTheDocument();
   });
 
-  it('persists dashboard filter selections when they change', async () => {
-    const savedConfig = withSource({
-      tableId: 'tbl1',
-      fields: optionFieldMapping('a'),
+  it('keeps displayed analysis when draft filters change and clears it only after updating analysis', async () => {
+    const savedConfig = {
+      ...withSource({
+        tableId: 'tbl1',
+        fields: optionFieldMapping('a'),
+      }),
+      backend: {
+        endpointUrl: 'https://backend.example.com',
+        baseToken: 'base-token',
+        configId: 'config-1',
+      },
+    };
+    const runningJob = deferred<never>();
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValueOnce({
+      jobId: 'job-draft-filters',
+      scopeKey: 'scope-draft-filters',
+      status: 'running',
     });
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(runningJob.promise);
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-before-filter-edit',
+      summary: createAnalysisResult(7),
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: savedConfig,
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [
+          optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00'),
+          optionRecordWithReviewId('a', 'review-b', '表 B 酒店', '2026-06-01 00:00:00'),
+        ],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('7')).toBeInTheDocument());
+    expect(screen.getByText(/上次分析：/)).toBeInTheDocument();
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText('开始日期'), { target: { value: '2026-05-01' } });
+
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('正在读取评论并进行 AI 聚合分析...')).toBeInTheDocument();
+    expect(screen.getAllByText('正在分析').length).toBeGreaterThan(0);
+    expect(screen.queryByText('7')).not.toBeInTheDocument();
+    expect(runtime.saveConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customConfig: expect.objectContaining({
+          filters: expect.objectContaining({
+            periodType: 'custom',
+            startDate: '2026-05-01',
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('persists dashboard filter selections only when updating analysis', async () => {
+    const savedConfig = {
+      ...withSource({
+        tableId: 'tbl1',
+        fields: optionFieldMapping('a'),
+      }),
+      backend: {
+        endpointUrl: 'https://backend.example.com',
+        baseToken: 'base-token',
+        configId: 'config-1',
+      },
+    };
+    const runningJob = deferred<never>();
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValueOnce({
+      jobId: 'job-persist-filter',
+      scopeKey: 'scope-persist-filter',
+      status: 'running',
+    });
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(runningJob.promise);
     const runtime = fakeRuntime({
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
@@ -535,6 +629,9 @@ describe('App initialization', () => {
 
     await waitFor(() => expect(screen.getByText('表 B 酒店')).toBeInTheDocument());
     fireEvent.change(screen.getByDisplayValue('全部酒店'), { target: { value: '表 B 酒店' } });
+
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
 
     await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
     expect(runtime.saveConfig).toHaveBeenLastCalledWith(
@@ -578,7 +675,14 @@ describe('App initialization', () => {
     expect(screen.getByPlaceholderText('结束日期')).toBeInTheDocument();
   });
 
-  it('fills and persists preset date ranges when selecting week', async () => {
+  it('fills preset date ranges as a draft and persists them only when updating analysis', async () => {
+    const runningJob = deferred<never>();
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValueOnce({
+      jobId: 'job-week-draft',
+      scopeKey: 'scope-week-draft',
+      status: 'running',
+    });
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(runningJob.promise);
     const runtime = fakeRuntime({
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
@@ -608,10 +712,14 @@ describe('App initialization', () => {
 
     fireEvent.click(screen.getByText('本周'));
 
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
     expect(screen.getByPlaceholderText('开始日期')).toHaveValue(expectedRange.startDate);
     expect(screen.getByPlaceholderText('结束日期')).toHaveValue(expectedRange.endDate);
-    expect(runtime.saveConfig).toHaveBeenLastCalledWith(
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalled());
+    expect(runtime.saveConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         customConfig: expect.objectContaining({
           filters: expect.objectContaining({
@@ -624,7 +732,7 @@ describe('App initialization', () => {
     );
   });
 
-  it('does not show the AI background update state when a filter config save triggers reload', async () => {
+  it('does not show the AI background update state when a draft filter change triggers config reload', async () => {
     let configChangeHandler: ((config: unknown) => void) | undefined;
     const savedConfig = {
       ...withSource({
@@ -697,14 +805,14 @@ describe('App initialization', () => {
     vi.mocked(runtime.saveConfig).mockClear();
 
     fireEvent.click(screen.getByText('本周'));
-    await waitFor(() => expect(runtime.saveConfig).toHaveBeenCalledTimes(1));
+    expect(runtime.saveConfig).not.toHaveBeenCalled();
     act(() => {
       configChangeHandler?.({ dataConditions: [], customConfig: savedConfig });
     });
 
     await waitFor(() => expect(runtime.getConfig).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).not.toBeInTheDocument();
-    expect(screen.getByText('更新分析')).not.toHaveAttribute('loading');
+    expect(screen.getAllByText('更新分析').length).toBeGreaterThan(0);
 
     await act(async () => {
       reloadGate.resolve();
@@ -1534,7 +1642,7 @@ describe('App initialization', () => {
     await waitFor(() => expect(screen.getByText('表 快')).toBeInTheDocument());
   });
 
-  it('exports the current backend result summary through the backend Base export API', async () => {
+  it('hides the backend Base summary export action while the entry is disabled', async () => {
     const runtime = fakeRuntime({
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
@@ -1565,23 +1673,14 @@ describe('App initialization', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText('导出摘要')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('导出摘要'));
-
-    await waitFor(() => expect(backendAnalysisClientMock.client.exportBaseSummary).toHaveBeenCalledTimes(1));
-    expect(backendAnalysisClientMock.client.exportBaseSummary).toHaveBeenCalledWith({
-      tenantKey: 'fixture-tenant',
-      baseUserId: 'fixture-user',
-      pluginInstanceId: 'fixture-instance',
-      resultId: 'result-1',
-      scopeKey: 'scope-initial',
-    });
-    expect(Toast.success).toHaveBeenCalledWith('摘要已导出到 Base：tbl-summary / tbl-topic');
+    await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
+    expect(screen.queryByText('导出摘要')).not.toBeInTheDocument();
+    expect(backendAnalysisClientMock.client.exportBaseSummary).not.toHaveBeenCalled();
     expect(runtime.addTable).not.toHaveBeenCalled();
     expect(runtime.addRecords).not.toHaveBeenCalled();
   });
 
-  it('surfaces backend export errors with stage and message', async () => {
+  it('does not trigger backend export errors while the summary export action is hidden', async () => {
     backendAnalysisClientMock.client.exportBaseSummary.mockRejectedValueOnce({
       stage: 'export_summary',
       message: 'LARK_BASE_AUTH_CODE is required for base summary export',
@@ -1616,11 +1715,13 @@ describe('App initialization', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText('导出摘要')).toBeInTheDocument());
-    fireEvent.click(screen.getByText('导出摘要'));
-
-    await waitFor(() => expect(screen.getByText('export_summary LARK_BASE_AUTH_CODE is required for base summary export')).toBeInTheDocument());
-    expect(Toast.error).toHaveBeenCalledWith('导出摘要失败：export_summary LARK_BASE_AUTH_CODE is required for base summary export');
+    await waitFor(() => expect(screen.getByText(/上次分析：/)).toBeInTheDocument());
+    expect(screen.queryByText('导出摘要')).not.toBeInTheDocument();
+    expect(screen.queryByText('export_summary LARK_BASE_AUTH_CODE is required for base summary export')).not.toBeInTheDocument();
+    expect(backendAnalysisClientMock.client.exportBaseSummary).not.toHaveBeenCalled();
+    expect(Toast.error).not.toHaveBeenCalledWith(
+      '导出摘要失败：export_summary LARK_BASE_AUTH_CODE is required for base summary export',
+    );
   });
 
   it('uses ownership query for job polling and latest result after backend updates scopeKey', async () => {
@@ -1882,10 +1983,12 @@ describe('App initialization', () => {
         status: 'success',
         resultId: 'result-long',
       });
-    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
-      resultId: 'result-long',
-      summary: createAnalysisResult(3),
-    });
+    backendAnalysisClientMock.client.getLatestResult
+      .mockRejectedValueOnce(new BackendAnalysisError('load_config', 'analysis result not found', 404))
+      .mockResolvedValueOnce({
+        resultId: 'result-long',
+        summary: createAnalysisResult(3),
+      });
     runtimeRef.current = runtime;
 
     render(<App />);
@@ -1963,8 +2066,61 @@ describe('App initialization', () => {
     });
   });
 
-  it('renders persisted backend latest result immediately for a running current job without polling before first paint', async () => {
+  it('shows analyzing state immediately when refreshing during an active backend job without a latest result', async () => {
+    const neverFinishedJob = deferred<never>();
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.getCurrentJob.mockResolvedValueOnce({
+      jobId: 'job-refresh-running',
+      scopeKey: 'scope-running',
+      status: 'running',
+      stage: 'extract_evidence',
+    });
+    backendAnalysisClientMock.client.getLatestResult.mockRejectedValueOnce(
+      new BackendAnalysisError('load_config', 'analysis result not found', 404),
+    );
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(neverFinishedJob.promise);
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('正在读取评论并进行 AI 聚合分析...')).toBeInTheDocument());
+    expect(screen.getAllByText('正在分析').length).toBeGreaterThan(0);
+    expect(screen.queryByText('尚未分析')).not.toBeInTheDocument();
+    expect(screen.queryByText('还没有分析缓存')).not.toBeInTheDocument();
+    expect(backendAnalysisClientMock.client.getJob).toHaveBeenCalledWith('job-refresh-running', {
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+    });
+  });
+
+  it('renders persisted backend latest result immediately for a running current job and continues polling it', async () => {
     const hostDataDeferred = deferred<unknown[][]>();
+    const neverFinishedJob = deferred<never>();
     const runtime = fakeRuntime({
       getState: () => 'View',
       getConfig: vi.fn(async () => ({
@@ -1990,18 +2146,24 @@ describe('App initialization', () => {
       resultId: 'result-persisted',
       summary: createAnalysisResult(3),
     });
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(neverFinishedJob.promise);
     runtimeRef.current = runtime;
 
     render(<App />);
 
     await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(screen.getByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).toBeInTheDocument();
     expect(backendAnalysisClientMock.client.getLatestResult).toHaveBeenCalledWith({
       tenantKey: 'fixture-tenant',
       baseUserId: 'fixture-user',
       pluginInstanceId: 'fixture-instance',
       scopeKey: 'scope-running',
     });
-    expect(backendAnalysisClientMock.client.getJob).not.toHaveBeenCalled();
+    expect(backendAnalysisClientMock.client.getJob).toHaveBeenCalledWith('job-running', {
+      tenantKey: 'fixture-tenant',
+      baseUserId: 'fixture-user',
+      pluginInstanceId: 'fixture-instance',
+    });
     expect(runtime.getData).toHaveBeenCalledTimes(1);
   });
 
