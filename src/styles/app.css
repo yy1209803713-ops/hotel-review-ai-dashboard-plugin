@@ -273,6 +273,23 @@ textarea {
   line-height: 1.5;
 }
 
+.cache-diagnostics-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.cache-diagnostics-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .rank-table {
   width: 100%;
   border-collapse: collapse;

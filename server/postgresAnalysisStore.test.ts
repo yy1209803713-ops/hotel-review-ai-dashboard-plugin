@@ -16,7 +16,7 @@ const baseConfigRequest: BackendAnalysisConfigUpsertRequest = {
   model: 'qwen-plus',
   source: {
     kind: 'postgres',
-    sourceId: 'base-token-a:tbl-review:vew-active',
+    sourceId: 'base-token-a:tbl-review',
     upstreamSourceKind: 'feishu_base',
     tableId: 'tbl-review',
     viewId: 'vew-active',
@@ -74,7 +74,7 @@ describeWithDatabase('createPostgresAnalysisBackendStore', () => {
         configVersion: 2,
         source: {
           kind: 'postgres',
-          sourceId: 'base-token-a:tbl-review:vew-active',
+          sourceId: 'base-token-a:tbl-review',
         },
       });
 
@@ -106,7 +106,7 @@ describeWithDatabase('createPostgresAnalysisBackendStore', () => {
         configVersion: secondConfig.configVersion,
         sourceVersion: {
           kind: 'postgres',
-          sourceId: 'base-token-a:tbl-review:vew-active',
+          sourceId: 'base-token-a:tbl-review',
           version: 'source-v1',
           contentHash: 'content-hash-v1',
           generatedAt: '2026-06-24T01:00:01.000Z',
@@ -122,9 +122,75 @@ describeWithDatabase('createPostgresAnalysisBackendStore', () => {
           positiveTopics: [],
           negativeTopics: [],
           actionItems: [],
+          cacheDiagnostics: {
+            triggered: true,
+            layers: ['evidence_cache', 'topic_mapping_cache'],
+            evidenceCache: {
+              requested: 10,
+              hits: 7,
+              misses: 3,
+              hitRate: 0.7,
+            },
+            topicMappingCache: {
+              requested: 4,
+              hits: 1,
+              misses: 3,
+              hitRate: 0.25,
+            },
+            aiTriggered: {
+              evidenceExtraction: true,
+              topicMapping: true,
+            },
+          },
         },
         topics: [{ topicId: 'topic-clean', label: '卫生' }],
       });
+      const cacheDiagnosticsRows = await pool.query<{
+        evidence_cache_requested: number;
+        evidence_cache_hits: number;
+        evidence_cache_misses: number;
+        evidence_cache_hit_rate: number;
+        topic_mapping_cache_requested: number;
+        topic_mapping_cache_hits: number;
+        topic_mapping_cache_misses: number;
+        topic_mapping_cache_hit_rate: number;
+        ai_called: boolean;
+        ai_evidence_extraction_called: boolean;
+        ai_topic_mapping_called: boolean;
+      }>(
+        `
+          SELECT
+            evidence_cache_requested,
+            evidence_cache_hits,
+            evidence_cache_misses,
+            evidence_cache_hit_rate,
+            topic_mapping_cache_requested,
+            topic_mapping_cache_hits,
+            topic_mapping_cache_misses,
+            topic_mapping_cache_hit_rate,
+            ai_called,
+            ai_evidence_extraction_called,
+            ai_topic_mapping_called
+          FROM analysis_results
+          WHERE id = $1
+        `,
+        [result.resultId],
+      );
+      expect(cacheDiagnosticsRows.rows).toEqual([
+        {
+          evidence_cache_requested: 10,
+          evidence_cache_hits: 7,
+          evidence_cache_misses: 3,
+          evidence_cache_hit_rate: 0.7,
+          topic_mapping_cache_requested: 4,
+          topic_mapping_cache_hits: 1,
+          topic_mapping_cache_misses: 3,
+          topic_mapping_cache_hit_rate: 0.25,
+          ai_called: true,
+          ai_evidence_extraction_called: true,
+          ai_topic_mapping_called: true,
+        },
+      ]);
       await store.saveEvidence(result.resultId, {
         'topic-clean': [
           { evidenceId: 'ev-1', recordId: 'rec-1', quote: '房间很干净', sentiment: 'positive' },

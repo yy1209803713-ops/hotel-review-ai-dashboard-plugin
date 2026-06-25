@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { BackendAnalysisError, type BackendAnalysisSourceKind } from './backendAnalysis';
 import type { PostgresQueryClient } from './postgresReviewSyncStore';
+import { GLOBAL_REVIEW_SOURCE_TENANT_KEY } from './reviewSync';
 import type { ReviewSourceQuery } from './reviewSource';
 import type { SourceTopicMapping } from '../src/services/analysisPipeline';
 import type {
@@ -393,7 +394,7 @@ export function resolveAnalysisCacheSourceIdentity(query: ReviewSourceQuery): An
   const sourceKind = resolveCacheSourceKind(query);
   const sourceId = resolveCacheSourceId(query);
   return {
-    tenantKey: requireNonEmptyString(query.tenantKey, 'tenantKey is required for analysis cache'),
+    tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
     sourceKind,
     sourceId,
     tableId: query.tableId,
@@ -451,15 +452,23 @@ function resolveCacheSourceKind(query: ReviewSourceQuery): BackendAnalysisSource
 }
 
 function resolveCacheSourceId(query: ReviewSourceQuery): string {
-  const configuredSourceId = pickNonEmptyString(query.sourceConfig?.sourceId);
-  if (configuredSourceId) {
-    return configuredSourceId;
-  }
-  const feishuSourceId = [query.baseToken, query.tableId, query.viewId].filter(isNonEmptyString).join(':');
+  const feishuSourceId = [query.baseToken, query.tableId].filter(isNonEmptyString).join(':');
   if (feishuSourceId) {
     return feishuSourceId;
   }
+  const configuredSourceId = pickNonEmptyString(query.sourceConfig?.sourceId);
+  if (configuredSourceId) {
+    return stripViewIdFromConfiguredSourceId(configuredSourceId);
+  }
   throw new BackendAnalysisError(400, 'read_evidence_cache', 'sourceConfig.sourceId is required for analysis cache');
+}
+
+function stripViewIdFromConfiguredSourceId(sourceId: string): string {
+  const parts = sourceId.split(':').filter(Boolean);
+  if (parts.length >= 2) {
+    return `${parts[0]}:${parts[1]}`;
+  }
+  return sourceId;
 }
 
 function parseEvidenceItems(rawJson: TopicEvidenceItem[] | string): TopicEvidenceItem[] | null {
@@ -643,13 +652,6 @@ function parseJson(value: unknown): unknown {
 
 function pickNonEmptyString(value: unknown): string | undefined {
   return isNonEmptyString(value) ? value : undefined;
-}
-
-function requireNonEmptyString(value: unknown, message: string): string {
-  if (!isNonEmptyString(value)) {
-    throw new BackendAnalysisError(400, 'read_evidence_cache', message);
-  }
-  return value;
 }
 
 function isNonEmptyString(value: unknown): value is string {

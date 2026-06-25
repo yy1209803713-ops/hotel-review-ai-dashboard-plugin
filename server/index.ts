@@ -1,7 +1,6 @@
 import * as http from 'node:http';
 import { AnalysisBackendService, createConfiguredReviewSources } from './backendAnalysis';
 import { handleBackendAnalysisRequest } from './backendAnalysisHandler';
-import { createAnalysisPreflightSyncRunner } from './analysisPreflightSync';
 import { AnalysisJobWorker } from './analysisWorker';
 import { createFormalAnalysisCacheRunner } from './formalAnalysisCacheRunner';
 import { createFeishuBaseSummaryExporterFactory } from './baseSummaryExporter';
@@ -52,7 +51,6 @@ const backendAnalysisService = new AnalysisBackendService({
   store: backendAnalysisStore,
   reviewSources,
   baseSummaryExporter: createFeishuBaseSummaryExporterFactory(),
-  preflightSyncRunner: createAnalysisPreflightSyncRunner(reviewSyncService),
 });
 const backendAnalysisWorker = new AnalysisJobWorker({
   service: backendAnalysisService,

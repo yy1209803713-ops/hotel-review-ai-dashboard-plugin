@@ -132,6 +132,7 @@ const { BackendAnalysisError } = await import('./services/backendAnalysisClient'
 describe('App initialization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.pushState({}, '', '/');
     runtimeRef.current = undefined;
     analysisPipelineMock.runAnalysis.mockResolvedValue(createAnalysisResult(0));
     backendAnalysisClientMock.createBackendAnalysisClient.mockReturnValue(backendAnalysisClientMock.client);
@@ -1211,6 +1212,53 @@ describe('App initialization', () => {
     expect(Toast.error).not.toHaveBeenCalledWith('请先填写并保存 API Key');
   });
 
+  it('uses canonical table sourceId for backend analysis even when a View is configured', async () => {
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            viewId: 'view-a',
+            dataRange: viewDataRange('view-a', '有效评论视图'),
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(runtime.getData).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
+    expect(backendAnalysisClientMock.client.upsertConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({
+          kind: 'postgres',
+          sourceId: 'base-token:tbl1',
+          viewId: 'view-a',
+        }),
+      }),
+    );
+  });
+
   it('keeps saved View config available for manual analysis when backend restore fails', async () => {
     const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     backendAnalysisClientMock.client.upsertConfig
@@ -1631,6 +1679,111 @@ describe('App initialization', () => {
       pluginInstanceId: 'fixture-instance',
       scopeKey: 'scope-actual',
     });
+  });
+
+  it('shows cache diagnostics after backend analysis when demo=1 is enabled', async () => {
+    window.history.pushState({}, '', '/?demo=1');
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValue({
+      resultId: 'result-1',
+      summary: {
+        ...createAnalysisResult(3),
+        cacheDiagnostics: {
+          triggered: true,
+          layers: ['evidence_cache', 'topic_mapping_cache'],
+          evidenceCache: {
+            requested: 220,
+            hits: 180,
+            misses: 40,
+            hitRate: 180 / 220,
+          },
+          topicMappingCache: {
+            requested: 15,
+            hits: 12,
+            misses: 3,
+            hitRate: 0.8,
+          },
+          aiTriggered: {
+            evidenceExtraction: true,
+            topicMapping: true,
+          },
+        },
+      },
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('缓存诊断')).toBeInTheDocument());
+    expect(screen.getByText('证据缓存：命中 180 / 220，命中率 81.8%')).toBeInTheDocument();
+    expect(screen.getByText('主题映射缓存：命中 12 / 15，命中率 80%')).toBeInTheDocument();
+    expect(screen.getByText('本次触发层：evidence_cache, topic_mapping_cache')).toBeInTheDocument();
+    expect(screen.getByText('本次是否调用 AI：证据抽取 是；主题归并 是')).toBeInTheDocument();
+  });
+
+  it('hides cache diagnostics when demo=1 is not enabled', async () => {
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValue({
+      resultId: 'result-1',
+      summary: {
+        ...createAnalysisResult(3),
+        cacheDiagnostics: {
+          triggered: true,
+          layers: ['evidence_cache'],
+          evidenceCache: { requested: 1, hits: 1, misses: 0, hitRate: 1 },
+          topicMappingCache: { requested: 0, hits: 0, misses: 0, hitRate: 0 },
+          aiTriggered: { evidenceExtraction: false, topicMapping: false },
+        },
+      },
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: {
+          ...withSource({
+            tableId: 'tbl1',
+            fields: optionFieldMapping('a'),
+          }),
+          backend: {
+            endpointUrl: 'https://backend.example.com',
+            baseToken: 'base-token',
+            configId: 'config-1',
+          },
+        },
+      })),
+      getData: vi.fn(async () => []),
+      readRecordsPage: vi.fn(async () => ({ records: [], hasMore: false })),
+    });
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    expect(screen.queryByText('缓存诊断')).not.toBeInTheDocument();
   });
 
   it('keeps polling backend jobs beyond one minute instead of surfacing a local timeout', async () => {

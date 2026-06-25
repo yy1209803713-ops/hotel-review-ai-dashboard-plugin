@@ -180,11 +180,19 @@ export function createPostgresAnalysisBackendStore(client: PostgresQueryClient):
     async saveResult(input) {
       const result = await withTransaction(client, async (transactionClient) => {
         const sourceVersionId = await ensureSourceVersion(transactionClient, input);
+        const cacheDiagnostics = readCacheDiagnostics(input.summary);
         const { rows } = await transactionClient.query<AnalysisResultRow>(
           `insert into analysis_results (
             tenant_key, base_user_id, plugin_instance_id, config_id, config_version, job_id, scope_key,
-            source_version_id, model, pipeline_version, result_json, summary_json, generated_at
-          ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
+            source_version_id, model, pipeline_version, result_json, summary_json,
+            evidence_cache_requested, evidence_cache_hits, evidence_cache_misses, evidence_cache_hit_rate,
+            topic_mapping_cache_requested, topic_mapping_cache_hits, topic_mapping_cache_misses,
+            topic_mapping_cache_hit_rate, ai_called, ai_evidence_extraction_called, ai_topic_mapping_called,
+            generated_at
+          ) values (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
+            $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+          )
           returning *`,
           [
             input.tenantKey,
@@ -199,6 +207,17 @@ export function createPostgresAnalysisBackendStore(client: PostgresQueryClient):
             input.pipelineVersion,
             JSON.stringify({ topics: input.topics, sourceVersion: input.sourceVersion }),
             JSON.stringify(input.summary),
+            cacheDiagnostics.evidenceCache.requested,
+            cacheDiagnostics.evidenceCache.hits,
+            cacheDiagnostics.evidenceCache.misses,
+            cacheDiagnostics.evidenceCache.hitRate,
+            cacheDiagnostics.topicMappingCache.requested,
+            cacheDiagnostics.topicMappingCache.hits,
+            cacheDiagnostics.topicMappingCache.misses,
+            cacheDiagnostics.topicMappingCache.hitRate,
+            cacheDiagnostics.aiCalled,
+            cacheDiagnostics.aiTriggered.evidenceExtraction,
+            cacheDiagnostics.aiTriggered.topicMapping,
             input.sourceVersion.generatedAt,
           ],
         );
@@ -377,7 +396,7 @@ async function ensureSourceVersion(client: PostgresQueryClient, input: Omit<Anal
     `insert into review_source_versions (
       tenant_key, source_kind, source_id, version, record_count, content_hash, generated_at
     ) values ($1, $2, $3, $4, $5, $6, $7)
-    on conflict (tenant_key, source_kind, source_id, source_key_hash, version)
+    on conflict (tenant_key, source_kind, source_id, version)
     do update set
       record_count = excluded.record_count,
       content_hash = excluded.content_hash,
@@ -515,6 +534,69 @@ function resolveModelFromSummary(summary: JsonValue): string {
     return summary.model;
   }
   return 'unknown';
+}
+
+type PersistedCacheDiagnostics = {
+  evidenceCache: {
+    requested: number;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  };
+  topicMappingCache: {
+    requested: number;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  };
+  aiCalled: boolean;
+  aiTriggered: {
+    evidenceExtraction: boolean;
+    topicMapping: boolean;
+  };
+};
+
+function readCacheDiagnostics(summary: JsonValue): PersistedCacheDiagnostics {
+  const diagnostics = isJsonObject(summary) ? summary.cacheDiagnostics : undefined;
+  const diagnosticsObject = isJsonObject(diagnostics) ? diagnostics : {};
+  const aiTriggered = isJsonObject(diagnosticsObject.aiTriggered) ? diagnosticsObject.aiTriggered : {};
+  const evidenceExtraction = readBoolean(aiTriggered.evidenceExtraction);
+  const topicMapping = readBoolean(aiTriggered.topicMapping);
+  return {
+    evidenceCache: readCacheLayerDiagnostics(diagnosticsObject.evidenceCache),
+    topicMappingCache: readCacheLayerDiagnostics(diagnosticsObject.topicMappingCache),
+    aiCalled: evidenceExtraction || topicMapping,
+    aiTriggered: {
+      evidenceExtraction,
+      topicMapping,
+    },
+  };
+}
+
+function readCacheLayerDiagnostics(value: unknown): PersistedCacheDiagnostics['evidenceCache'] {
+  const layer = isJsonObject(value) ? value : {};
+  return {
+    requested: readNonNegativeInteger(layer.requested),
+    hits: readNonNegativeInteger(layer.hits),
+    misses: readNonNegativeInteger(layer.misses),
+    hitRate: readFiniteNumber(layer.hitRate),
+  };
+}
+
+function readNonNegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
+}
+
+function readFiniteNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function readBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function isJsonObject(value: unknown): value is Record<string, JsonValue | undefined> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function parseJson(value: unknown): unknown {

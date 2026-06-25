@@ -8,7 +8,10 @@ import {
 import type { ReviewSyncJob, ReviewSyncStore } from './postgresReviewSyncStore';
 import type { ReviewRecord, ReviewSource, ReviewSourceQuery } from './reviewSource';
 
-export type ReviewSyncTriggerType = 'event' | 'schedule' | 'manual' | 'analysis_preflight';
+export const GLOBAL_REVIEW_SOURCE_TENANT_KEY = 'global-review-source';
+
+export type ReviewSyncMode = 'full' | 'incremental';
+export type ReviewSyncTriggerType = 'manual_api';
 
 export type ReviewSyncSourceKey = {
   tenantKey: string;
@@ -18,14 +21,6 @@ export type ReviewSyncSourceKey = {
   tableId?: string;
   viewId?: string;
   fieldMapping: Record<string, string>;
-};
-
-export type FeishuRecordChangedOperation = 'create' | 'update' | 'delete';
-
-export type FeishuRecordChangedEvent = {
-  sourceKey: ReviewSyncSourceKey;
-  recordId: string;
-  operation: FeishuRecordChangedOperation;
 };
 
 export type ReviewSyncServiceOptions = {
@@ -45,17 +40,27 @@ export class ReviewSyncService {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  async enqueueSyncJob(sourceKey: ReviewSyncSourceKey, triggerType: ReviewSyncTriggerType): Promise<ReviewSyncJob> {
+  async enqueueSyncJob(
+    sourceKey: ReviewSyncSourceKey,
+    mode: ReviewSyncMode,
+    triggerType: ReviewSyncTriggerType = 'manual_api',
+  ): Promise<ReviewSyncJob> {
     validateSourceKey(sourceKey);
     return this.store.createSyncJob({
       sourceKey,
+      mode,
       triggerType,
       createdAt: this.now(),
     });
   }
 
-  async runFullSync(sourceKey: ReviewSyncSourceKey, triggerType: ReviewSyncTriggerType = 'manual'): Promise<ReviewSyncJob> {
-    const createdJob = await this.enqueueSyncJob(sourceKey, triggerType);
+  async runFullSync(sourceKey: ReviewSyncSourceKey): Promise<ReviewSyncJob> {
+    const createdJob = await this.enqueueSyncJob(sourceKey, 'full');
+    return this.runQueuedSyncJob(createdJob.jobId, sourceKey);
+  }
+
+  async runIncrementalSync(sourceKey: ReviewSyncSourceKey): Promise<ReviewSyncJob> {
+    const createdJob = await this.enqueueSyncJob(sourceKey, 'incremental');
     return this.runQueuedSyncJob(createdJob.jobId, sourceKey);
   }
 
@@ -84,10 +89,21 @@ export class ReviewSyncService {
         updatedAt: this.now(),
       });
 
+      const existingRecords = claimedJob.mode === 'incremental'
+        ? await this.store.listReviewRecords(jobSourceKey)
+        : [];
+      const reviewsToUpsert = claimedJob.mode === 'incremental'
+        ? diffChangedReviews(existingRecords, reviews)
+        : reviews;
+      const recordsUnchanged = claimedJob.mode === 'incremental'
+        ? reviews.length - reviewsToUpsert.length
+        : 0;
+
       currentJob = await this.store.updateSyncJob({
         ...currentJob,
         stage: 'write_source_version',
         recordsRead: reviews.length,
+        recordsUnchanged,
         updatedAt: this.now(),
       });
       const generatedAt = this.now();
@@ -95,7 +111,10 @@ export class ReviewSyncService {
       currentJob = await this.store.completeSyncJob({
         job: currentJob,
         sourceKey: jobSourceKey,
-        reviews,
+        reviews: reviewsToUpsert,
+        activeRecordIds: reviews.map((review) => review.recordId),
+        recordsRead: reviews.length,
+        recordsUnchanged,
         sourceVersion,
         syncedAt: generatedAt,
       });
@@ -110,23 +129,13 @@ export class ReviewSyncService {
         errorStage: currentJob.stage,
         errorMessage: error.message,
         finishedAt: failedAt,
+        durationMs: computeDurationMs(currentJob.startedAt, failedAt),
         updatedAt: failedAt,
       });
       throw error;
     }
   }
 
-  async handleFeishuRecordChangedEvent(event: FeishuRecordChangedEvent): Promise<ReviewSyncJob> {
-    validateSourceKey(event.sourceKey);
-    if (!isNonEmptyString(event.recordId)) {
-      throw new BackendAnalysisError(400, 'validate_request', 'recordId is required');
-    }
-    if (!['create', 'update', 'delete'].includes(event.operation)) {
-      throw new BackendAnalysisError(400, 'validate_request', 'operation must be create, update, or delete');
-    }
-
-    return this.runFullSync(event.sourceKey, 'event');
-  }
 }
 
 function toReviewSourceQuery(sourceKey: ReviewSyncSourceKey): ReviewSourceQuery {
@@ -162,6 +171,68 @@ function buildSyncedSourceVersion(sourceKey: ReviewSyncSourceKey, reviews: Revie
     recordCount: reviews.length,
     generatedAt,
   };
+}
+
+function diffChangedReviews(existingRecords: Array<{ recordId: string; contentHash: string; parsedReview: Record<string, unknown> }>, reviews: ReviewRecord[]): ReviewRecord[] {
+  const existingByRecordId = new Map(existingRecords.map((record) => [record.recordId, record]));
+  return reviews.filter((review) => {
+    const existing = existingByRecordId.get(review.recordId);
+    return (
+      !existing ||
+      existing.contentHash !== review.contentHash ||
+      canonicalJson(existing.parsedReview) !== canonicalJson(review.mappedFields)
+    );
+  });
+}
+
+export function buildCanonicalReviewSyncSourceKey(input: {
+  baseToken: string;
+  tableId: string;
+  fieldMapping: Record<string, string>;
+}): ReviewSyncSourceKey {
+  validateSyncSourceInput(input);
+  const baseToken = input.baseToken.trim();
+  const tableId = input.tableId.trim();
+  return {
+    tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
+    sourceKind: 'feishu_base',
+    sourceId: `${baseToken}:${tableId}`,
+    baseToken,
+    tableId,
+    fieldMapping: input.fieldMapping,
+  };
+}
+
+function validateSyncSourceInput(input: { baseToken?: unknown; tableId?: unknown; fieldMapping?: unknown }): void {
+  const missing = ['baseToken', 'tableId', 'fieldMapping'].filter((fieldName) => !hasRequiredSyncSourceField(input, fieldName));
+  if (missing.length) {
+    throw new BackendAnalysisError(400, 'validate_request', `missing sync source fields: ${missing.join(', ')}`);
+  }
+  for (const [fieldName, fieldId] of Object.entries(input.fieldMapping as Record<string, unknown>)) {
+    if (!isNonEmptyString(fieldId)) {
+      throw new BackendAnalysisError(400, 'validate_request', `fieldMapping.${fieldName} must be a non-empty string`);
+    }
+  }
+}
+
+function hasRequiredSyncSourceField(input: { baseToken?: unknown; tableId?: unknown; fieldMapping?: unknown }, fieldName: string): boolean {
+  const value = input[fieldName as keyof typeof input];
+  if (fieldName === 'fieldMapping') {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+  return isNonEmptyString(value);
+}
+
+export function computeDurationMs(startedAt: string | undefined, finishedAt: string | undefined): number | undefined {
+  if (!startedAt || !finishedAt) {
+    return undefined;
+  }
+  const started = Date.parse(startedAt);
+  const finished = Date.parse(finishedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) {
+    return undefined;
+  }
+  return Math.max(0, finished - started);
 }
 
 function validateSourceKey(sourceKey: ReviewSyncSourceKey | undefined): asserts sourceKey is ReviewSyncSourceKey {

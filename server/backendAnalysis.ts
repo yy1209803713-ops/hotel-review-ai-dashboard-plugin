@@ -244,10 +244,6 @@ export type ReviewSourceVersionProvider = {
   }>): Promise<SourceVersion>;
 };
 
-export type AnalysisPreflightSyncRunner = {
-  run(input: { config: BackendAnalysisConfig }): Promise<void>;
-};
-
 export class BackendAnalysisError extends Error {
   readonly status: number;
   readonly stage: AnalysisStage;
@@ -509,20 +505,17 @@ export class AnalysisBackendService {
   private readonly pipelineVersion: string;
   private readonly reviewSources: Partial<Record<BackendAnalysisSourceKind, ReviewSourceVersionProvider>>;
   private readonly baseSummaryExporter?: BaseSummaryExporter;
-  private readonly preflightSyncRunner?: AnalysisPreflightSyncRunner;
 
   constructor(options: {
     store: AnalysisBackendStore;
     pipelineVersion?: string;
     reviewSources?: Partial<Record<BackendAnalysisSourceKind, ReviewSourceVersionProvider>>;
     baseSummaryExporter?: BaseSummaryExporter;
-    preflightSyncRunner?: AnalysisPreflightSyncRunner;
   }) {
     this.store = options.store;
     this.pipelineVersion = options.pipelineVersion ?? BACKEND_ANALYSIS_PIPELINE_VERSION;
     this.reviewSources = options.reviewSources ?? {};
     this.baseSummaryExporter = options.baseSummaryExporter;
-    this.preflightSyncRunner = options.preflightSyncRunner;
   }
 
   async upsertConfig(input: BackendAnalysisConfigUpsertRequest): Promise<BackendAnalysisConfigUpsertResponse> {
@@ -540,9 +533,6 @@ export class AnalysisBackendService {
   async createOrGetAnalysisJob(input: CreateAnalysisJobRequest): Promise<CreateAnalysisJobResponse> {
     validateResolveScopeRequest(input);
     const config = await this.loadConfigForIdentity(input);
-    if (config.source.kind === 'postgres') {
-      await this.preflightSyncRunner?.run({ config });
-    }
     const scope = await this.resolveScopeForConfig(config);
     const { job, created } = await this.store.createOrGetActiveJob({
       tenantKey: input.tenantKey,

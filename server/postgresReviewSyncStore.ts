@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { BackendAnalysisSourceKind, SourceVersion } from './backendAnalysis';
 import type { ReviewRecord } from './reviewSource';
-import type { ReviewSyncSourceKey, ReviewSyncTriggerType } from './reviewSync';
+import { computeDurationMs, type ReviewSyncMode, type ReviewSyncSourceKey, type ReviewSyncTriggerType } from './reviewSync';
 
 export type ReviewSyncStage =
   | 'queued'
@@ -19,16 +19,19 @@ export type ReviewSyncJob = {
   tenantKey: string;
   sourceKind: BackendAnalysisSourceKind;
   sourceId: string;
+  mode: ReviewSyncMode;
   triggerType: ReviewSyncTriggerType;
   status: ReviewSyncJobStatus;
   stage: ReviewSyncStage;
   recordsRead: number;
   recordsUpserted: number;
   recordsDeleted: number;
+  recordsUnchanged: number;
   errorStage?: ReviewSyncStage;
   errorMessage?: string;
   startedAt?: string;
   finishedAt?: string;
+  durationMs?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -55,6 +58,7 @@ export type StoredReviewRecord = {
 export type ReviewSyncStore = {
   createSyncJob(input: {
     sourceKey: ReviewSyncSourceKey;
+    mode: ReviewSyncMode;
     triggerType: ReviewSyncTriggerType;
     createdAt: string;
   }): Promise<ReviewSyncJob>;
@@ -85,6 +89,9 @@ export type ReviewSyncStore = {
     job: ReviewSyncJob;
     sourceKey: ReviewSyncSourceKey;
     reviews: ReviewRecord[];
+    activeRecordIds?: string[];
+    recordsRead?: number;
+    recordsUnchanged?: number;
     sourceVersion: SourceVersion;
     syncedAt: string;
   }): Promise<ReviewSyncJob>;
@@ -103,7 +110,7 @@ export function createInMemoryReviewSyncStore(): ReviewSyncStore {
 
   return {
     async createSyncJob(input) {
-      const activeJob = findActiveJob(jobs, input.sourceKey, input.triggerType);
+      const activeJob = findActiveJob(jobs, input.sourceKey, input.mode);
       if (activeJob) {
         return deepClone(activeJob);
       }
@@ -113,12 +120,14 @@ export function createInMemoryReviewSyncStore(): ReviewSyncStore {
         tenantKey: input.sourceKey.tenantKey,
         sourceKind: input.sourceKey.sourceKind,
         sourceId: input.sourceKey.sourceId,
+        mode: input.mode,
         triggerType: input.triggerType,
         status: 'queued',
         stage: 'queued',
         recordsRead: 0,
         recordsUpserted: 0,
         recordsDeleted: 0,
+        recordsUnchanged: 0,
         createdAt: input.createdAt,
         updatedAt: input.createdAt,
       };
@@ -254,7 +263,7 @@ export function createInMemoryReviewSyncStore(): ReviewSyncStore {
       });
       const recordsDeleted = await this.softDeleteMissingRecords({
         sourceKey: input.sourceKey,
-        activeRecordIds: input.reviews.map((review) => review.recordId),
+        activeRecordIds: input.activeRecordIds ?? input.reviews.map((review) => review.recordId),
         syncedAt: input.syncedAt,
       });
       await this.saveSourceVersion(input.sourceKey, input.sourceVersion);
@@ -262,10 +271,12 @@ export function createInMemoryReviewSyncStore(): ReviewSyncStore {
         ...input.job,
         status: 'success',
         stage: 'success',
-        recordsRead: input.reviews.length,
+        recordsRead: input.recordsRead ?? input.reviews.length,
         recordsUpserted,
         recordsDeleted,
+        recordsUnchanged: input.recordsUnchanged ?? 0,
         finishedAt: input.syncedAt,
+        durationMs: computeDurationMs(input.job.startedAt, input.syncedAt),
         updatedAt: input.syncedAt,
         errorStage: undefined,
         errorMessage: undefined,
@@ -280,10 +291,10 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
       const { rows } = await client.query<SyncJobRow>(
         `insert into sync_jobs (
           tenant_key, source_kind, source_id, base_token, table_id, view_id, field_mapping_json, source_key_hash,
-          trigger_type, status, stage,
-          records_read, records_upserted, records_deleted, created_at, updated_at
-        ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, 'queued', 'queued', 0, 0, 0, $10, $10)
-        on conflict (tenant_key, source_kind, source_id, trigger_type, source_key_hash)
+          mode, trigger_type, status, stage,
+          records_read, records_upserted, records_deleted, records_unchanged, created_at, updated_at
+        ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, 'queued', 'queued', 0, 0, 0, 0, $11, $11)
+        on conflict (tenant_key, source_kind, source_id, mode)
           where status in ('queued', 'running')
         do update set updated_at = sync_jobs.updated_at
         returning *`,
@@ -296,6 +307,7 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
           input.sourceKey.viewId ?? null,
           JSON.stringify(input.sourceKey.fieldMapping),
           makeSourceKeyHash(input.sourceKey),
+          input.mode,
           input.triggerType,
           input.createdAt,
         ],
@@ -334,8 +346,8 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
       const { rows } = await client.query<SyncJobRow>(
         `update sync_jobs
           set status = $2, stage = $3, records_read = $4, records_upserted = $5,
-            records_deleted = $6, error_stage = $7, error_message = $8,
-            started_at = $9, finished_at = $10, updated_at = $11
+            records_deleted = $6, records_unchanged = $7, error_stage = $8, error_message = $9,
+            started_at = $10, finished_at = $11, duration_ms = $12, updated_at = $13
         where id = $1
         returning *`,
         [
@@ -345,10 +357,12 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
           job.recordsRead,
           job.recordsUpserted,
           job.recordsDeleted,
+          job.recordsUnchanged,
           job.errorStage ?? null,
           job.errorMessage ?? null,
           job.startedAt ?? null,
           job.finishedAt ?? null,
+          job.durationMs ?? computeDurationMs(job.startedAt, job.finishedAt) ?? null,
           job.updatedAt,
         ],
       );
@@ -366,14 +380,13 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
     async softDeleteReviewRecord(input) {
       const { rows } = await client.query<{ id: string }>(
         `update review_records
-          set is_deleted = true, synced_at = $6, updated_at = $6
-        where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4 and record_id = $5
+          set is_deleted = true, synced_at = $5, updated_at = $5
+        where tenant_key = $1 and source_kind = $2 and source_id = $3 and record_id = $4
         returning id`,
         [
           input.sourceKey.tenantKey,
           input.sourceKey.sourceKind,
           input.sourceKey.sourceId,
-          makeSourceKeyHash(input.sourceKey),
           input.recordId,
           input.syncedAt,
         ],
@@ -384,9 +397,9 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
     async getReviewRecord(sourceKey, recordId) {
       const { rows } = await client.query<ReviewRecordRow>(
         `select * from review_records
-        where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4 and record_id = $5
+        where tenant_key = $1 and source_kind = $2 and source_id = $3 and record_id = $4
         limit 1`,
-        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId, makeSourceKeyHash(sourceKey), recordId],
+        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId, recordId],
       );
       return rows[0] ? reviewRecordFromRow(rows[0]) : undefined;
     },
@@ -394,9 +407,9 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
     async listReviewRecords(sourceKey) {
       const { rows } = await client.query<ReviewRecordRow>(
         `select * from review_records
-        where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4 and is_deleted = false
+        where tenant_key = $1 and source_kind = $2 and source_id = $3 and is_deleted = false
         order by record_id asc`,
-        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId, makeSourceKeyHash(sourceKey)],
+        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId],
       );
       return rows.map(reviewRecordFromRow);
     },
@@ -408,10 +421,10 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
     async getLatestSourceVersion(sourceKey) {
       const { rows } = await client.query<SourceVersionRow>(
         `select * from review_source_versions
-        where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4
+        where tenant_key = $1 and source_kind = $2 and source_id = $3
         order by generated_at desc, created_at desc
         limit 1`,
-        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId, makeSourceKeyHash(sourceKey)],
+        [sourceKey.tenantKey, sourceKey.sourceKind, sourceKey.sourceId],
       );
       return rows[0] ? sourceVersionFromRow(rows[0]) : undefined;
     },
@@ -425,7 +438,7 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
         });
         const recordsDeleted = await softDeleteMissingRecordsWithClient(transactionClient, {
           sourceKey: input.sourceKey,
-          activeRecordIds: input.reviews.map((review) => review.recordId),
+          activeRecordIds: input.activeRecordIds ?? input.reviews.map((review) => review.recordId),
           syncedAt: input.syncedAt,
         });
         await saveSourceVersionWithClient(transactionClient, input.sourceKey, input.sourceVersion);
@@ -433,11 +446,19 @@ export function createPostgresReviewSyncStore(client: PostgresQueryClient): Revi
         const { rows } = await transactionClient.query<SyncJobRow>(
           `update sync_jobs
             set status = 'success', stage = 'success', records_read = $2, records_upserted = $3,
-              records_deleted = $4, error_stage = null, error_message = null,
-              finished_at = $5, updated_at = $5
+              records_deleted = $4, records_unchanged = $5, error_stage = null, error_message = null,
+              finished_at = $6, duration_ms = $7, updated_at = $6
           where id = $1
           returning *`,
-          [input.job.jobId, input.reviews.length, recordsUpserted, recordsDeleted, input.syncedAt],
+          [
+            input.job.jobId,
+            input.recordsRead ?? input.reviews.length,
+            recordsUpserted,
+            recordsDeleted,
+            input.recordsUnchanged ?? 0,
+            input.syncedAt,
+            computeDurationMs(input.job.startedAt, input.syncedAt) ?? null,
+          ],
         );
         return syncJobFromRow(requireSingleRow(rows, `sync job ${input.job.jobId} not found`));
       });
@@ -455,16 +476,19 @@ type SyncJobRow = {
   view_id?: string | null;
   field_mapping_json?: Record<string, string> | string | null;
   source_key_hash?: string | null;
+  mode?: ReviewSyncMode | null;
   trigger_type: ReviewSyncTriggerType;
   status: ReviewSyncJobStatus;
   stage: ReviewSyncStage;
   records_read: number;
   records_upserted: number;
   records_deleted: number;
+  records_unchanged?: number | null;
   error_stage?: ReviewSyncStage | null;
   error_message?: string | null;
   started_at?: string | Date | null;
   finished_at?: string | Date | null;
+  duration_ms?: number | string | null;
   created_at: string | Date;
   updated_at: string | Date;
 };
@@ -513,16 +537,19 @@ function syncJobFromRow(row: SyncJobRow): ReviewSyncJob {
     tenantKey: row.tenant_key,
     sourceKind: row.source_kind,
     sourceId: row.source_id,
+    mode: row.mode ?? 'full',
     triggerType: row.trigger_type,
     status: row.status,
     stage: row.stage,
     recordsRead: Number(row.records_read),
     recordsUpserted: Number(row.records_upserted),
     recordsDeleted: Number(row.records_deleted),
+    recordsUnchanged: Number(row.records_unchanged ?? 0),
     errorStage: row.error_stage ?? undefined,
     errorMessage: row.error_message ?? undefined,
     startedAt: row.started_at ? toIsoString(row.started_at) : undefined,
     finishedAt: row.finished_at ? toIsoString(row.finished_at) : undefined,
+    durationMs: row.duration_ms === null || row.duration_ms === undefined ? undefined : Number(row.duration_ms),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   };
@@ -564,8 +591,9 @@ async function upsertReviewRecordsWithClient(
         fields_json, parsed_review_json, content_hash, source_updated_at,
         synced_at, is_deleted, created_at, updated_at
       ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $11, false, $11, $11)
-      on conflict (tenant_key, source_kind, source_id, source_key_hash, record_id)
+      on conflict (tenant_key, source_kind, source_id, record_id)
       do update set
+        source_key_hash = excluded.source_key_hash,
         base_token = excluded.base_token,
         table_id = excluded.table_id,
         fields_json = excluded.fields_json,
@@ -604,13 +632,12 @@ async function softDeleteMissingRecordsWithClient(
   const { rows } = await client.query<{ count: string }>(
     `with updated as (
       update review_records
-        set is_deleted = true, synced_at = $5, updated_at = $5
+        set is_deleted = true, synced_at = $4, updated_at = $4
       where tenant_key = $1
         and source_kind = $2
         and source_id = $3
-        and source_key_hash = $4
         and is_deleted = false
-        and not (record_id = any($6::text[]))
+        and not (record_id = any($5::text[]))
       returning id
     )
     select count(*)::text as count from updated`,
@@ -618,7 +645,6 @@ async function softDeleteMissingRecordsWithClient(
       input.sourceKey.tenantKey,
       input.sourceKey.sourceKind,
       input.sourceKey.sourceId,
-      makeSourceKeyHash(input.sourceKey),
       input.syncedAt,
       input.activeRecordIds,
     ],
@@ -635,8 +661,9 @@ async function saveSourceVersionWithClient(
     `insert into review_source_versions (
       tenant_key, source_kind, source_id, source_key_hash, version, record_count, content_hash, generated_at
     ) values ($1, $2, $3, $4, $5, $6, $7, $8)
-    on conflict (tenant_key, source_kind, source_id, source_key_hash, version)
+    on conflict (tenant_key, source_kind, source_id, version)
     do update set
+      source_key_hash = excluded.source_key_hash,
       record_count = excluded.record_count,
       content_hash = excluded.content_hash,
       generated_at = excluded.generated_at
@@ -675,13 +702,13 @@ async function withTransaction<T>(client: PostgresQueryClient, run: (transaction
 function findActiveJob(
   jobs: Map<string, ReviewSyncJob>,
   sourceKey: ReviewSyncSourceKey,
-  triggerType: ReviewSyncTriggerType,
+  mode: ReviewSyncMode,
 ): ReviewSyncJob | undefined {
   return Array.from(jobs.values()).find(
     (job) =>
       (job.status === 'queued' || job.status === 'running') &&
-      job.triggerType === triggerType &&
-      makeActiveJobIdentity(job.sourceKey, job.triggerType) === makeActiveJobIdentity(sourceKey, triggerType),
+      job.mode === mode &&
+      makeActiveJobIdentity(job.sourceKey, job.mode) === makeActiveJobIdentity(sourceKey, mode),
   );
 }
 
@@ -722,12 +749,12 @@ function sourceVersionFromRow(row: SourceVersionRow): SourceVersion {
   };
 }
 
-function makeSourceKey(sourceKey: Pick<ReviewSyncSourceKey, 'tenantKey' | 'sourceKind' | 'sourceId' | 'fieldMapping'>): string {
-  return `${sourceKey.tenantKey}:${sourceKey.sourceKind}:${sourceKey.sourceId}:${makeSourceKeyHash(sourceKey)}`;
+function makeSourceKey(sourceKey: Pick<ReviewSyncSourceKey, 'tenantKey' | 'sourceKind' | 'sourceId'>): string {
+  return `${sourceKey.tenantKey}:${sourceKey.sourceKind}:${sourceKey.sourceId}`;
 }
 
-function makeActiveJobIdentity(sourceKey: ReviewSyncSourceKey, triggerType: ReviewSyncTriggerType): string {
-  return `${makeSourceKey(sourceKey)}:${triggerType}`;
+function makeActiveJobIdentity(sourceKey: ReviewSyncSourceKey, mode: ReviewSyncMode): string {
+  return `${makeSourceKey(sourceKey)}:${mode}`;
 }
 
 function makeSourceKeyHash(sourceKey: Pick<ReviewSyncSourceKey, 'fieldMapping'>): string {
@@ -757,8 +784,7 @@ function matchesSource(record: StoredReviewRecord, sourceKey: ReviewSyncSourceKe
   return (
     record.tenantKey === sourceKey.tenantKey &&
     record.sourceKind === sourceKey.sourceKind &&
-    record.sourceId === sourceKey.sourceId &&
-    record.sourceKeyHash === makeSourceKeyHash(sourceKey)
+    record.sourceId === sourceKey.sourceId
   );
 }
 

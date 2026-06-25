@@ -81,7 +81,7 @@ describe('FeishuBaseReviewSource', () => {
     expect(firstVersion).toEqual(secondVersion);
     expect(firstVersion).toMatchObject({
       kind: 'feishu_base',
-      sourceId: 'base-token-a:tbl-review:vew-active',
+      sourceId: 'base-token-a:tbl-review',
       recordCount: 3,
       generatedAt: '1970-01-01T00:00:01.000Z',
     });

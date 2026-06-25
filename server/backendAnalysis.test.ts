@@ -233,19 +233,17 @@ describe('AnalysisBackendService', () => {
     });
   });
 
-  it('runs analysis_preflight sync before creating a job for a postgres read model config', async () => {
-    const preflightSyncRunner = { run: vi.fn(async () => undefined) };
+  it('creates a job for a postgres read model config without triggering sync', async () => {
     const postgresSource = new MutableFakeReviewSource([review('rec-1', 'Great view')]);
     const service = new AnalysisBackendService({
       store: createInMemoryAnalysisBackendStore(),
       reviewSources: { postgres: postgresSource },
-      preflightSyncRunner,
     });
     const config = await service.upsertConfig({
       ...baseConfigRequest,
       source: {
         kind: 'postgres',
-        sourceId: 'base-token-a:tbl-review:vew-active',
+        sourceId: 'base-token-a:tbl-review',
         upstreamSourceKind: 'feishu_base',
         tableId: 'tbl-review',
         viewId: 'vew-active',
@@ -260,7 +258,6 @@ describe('AnalysisBackendService', () => {
       configId: config.configId,
     });
 
-    expect(preflightSyncRunner.run).toHaveBeenCalledWith({ config: expect.objectContaining({ configId: config.configId }) });
     expect(postgresSource.queries).toHaveLength(1);
     expect(job.status).toBe('queued');
   });
@@ -864,7 +861,7 @@ class MutableFakeReviewSource implements ReviewSource {
     const contentHash = this.reviews.map((item) => `${item.recordId}:${item.contentHash}`).join('|') || 'empty';
     return {
       kind: 'feishu_base',
-      sourceId: `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`,
+      sourceId: `${query.baseToken}:${query.tableId}`,
       version: `source-${contentHash}`,
       contentHash,
       generatedAt: 'fake-now',
@@ -891,7 +888,7 @@ class ChangingGeneratedAtReviewSource implements ReviewSource {
     const contentHash = reviews.map((item) => `${item.recordId}:${item.contentHash}`).join('|') || 'empty';
     return {
       kind: 'feishu_base',
-      sourceId: `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`,
+      sourceId: `${query.baseToken}:${query.tableId}`,
       version: `source-${contentHash}`,
       contentHash,
       generatedAt: `fake-now-${this.calls}`,

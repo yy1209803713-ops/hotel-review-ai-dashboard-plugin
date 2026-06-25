@@ -1,10 +1,9 @@
 import { BackendAnalysisError, type AnalysisStage } from './backendAnalysis';
 import type { ReviewSyncJob } from './postgresReviewSyncStore';
 import {
-  type FeishuRecordChangedEvent,
+  buildCanonicalReviewSyncSourceKey,
   type ReviewSyncService,
   type ReviewSyncSourceKey,
-  type ReviewSyncTriggerType,
 } from './reviewSync';
 
 export type ReviewSyncHandlerOptions = {
@@ -17,6 +16,12 @@ type ErrorBody = {
   message: string;
 };
 
+type SyncSourceRequestBody = {
+  baseToken?: string;
+  tableId?: string;
+  fieldMapping?: Record<string, string>;
+};
+
 const API_PREFIX = '/api/hotel-review-ai';
 
 export async function handleReviewSyncRequest(request: Request, options: ReviewSyncHandlerOptions): Promise<Response> {
@@ -27,25 +32,13 @@ export async function handleReviewSyncRequest(request: Request, options: ReviewS
       return emptyCorsResponse(204);
     }
 
-    if (url.pathname === `${API_PREFIX}/sync/feishu/record-changed`) {
+    if (url.pathname === `${API_PREFIX}/sync/full` || url.pathname === `${API_PREFIX}/sync/incremental`) {
       requireMethod(request, 'POST');
-      const event = await parseJsonBody<FeishuRecordChangedEvent>(request);
-      validateRecordChangedEvent(event);
-      const job = await options.service.enqueueSyncJob(event.sourceKey, 'event');
-      options.onSyncJobCreated?.(job.jobId, event.sourceKey);
-      return jsonResponse(toSyncJobResponse(job), 202);
-    }
-
-    if (url.pathname === `${API_PREFIX}/sync/manual`) {
-      requireMethod(request, 'POST');
-      const body = await parseJsonBody<{ sourceKey: ReviewSyncSourceKey; triggerType?: ReviewSyncTriggerType }>(request);
-      validateSourceKey(body.sourceKey);
-      const triggerType = body.triggerType ?? 'manual';
-      if (triggerType !== 'manual' && triggerType !== 'schedule' && triggerType !== 'analysis_preflight') {
-        throw new BackendAnalysisError(400, 'validate_request', 'manual sync triggerType must be manual, schedule, or analysis_preflight');
-      }
-      const job = await options.service.enqueueSyncJob(body.sourceKey, triggerType);
-      options.onSyncJobCreated?.(job.jobId, body.sourceKey);
+      const body = await parseJsonBody<SyncSourceRequestBody>(request);
+      const sourceKey = buildCanonicalReviewSyncSourceKey(body as Required<SyncSourceRequestBody>);
+      const mode = url.pathname.endsWith('/full') ? 'full' : 'incremental';
+      const job = await options.service.enqueueSyncJob(sourceKey, mode);
+      options.onSyncJobCreated?.(job.jobId, sourceKey);
       return jsonResponse(toSyncJobResponse(job), 202);
     }
 
@@ -64,12 +57,15 @@ function toSyncJobResponse(job: ReviewSyncJob): Record<string, unknown> {
     tenantKey: job.tenantKey,
     sourceKind: job.sourceKind,
     sourceId: job.sourceId,
+    mode: job.mode,
     triggerType: job.triggerType,
     status: job.status,
     stage: job.stage,
     recordsRead: job.recordsRead,
     recordsUpserted: job.recordsUpserted,
     recordsDeleted: job.recordsDeleted,
+    recordsUnchanged: job.recordsUnchanged,
+    durationMs: job.durationMs,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };
@@ -87,47 +83,6 @@ function requireMethod(request: Request, method: string): void {
   if (request.method !== method) {
     throw new BackendAnalysisError(405, 'validate_request', 'method not allowed');
   }
-}
-
-function validateRecordChangedEvent(event: FeishuRecordChangedEvent): void {
-  if (!event || typeof event !== 'object') {
-    throw new BackendAnalysisError(400, 'validate_request', 'event body is required');
-  }
-  if (typeof event.recordId !== 'string' || !event.recordId.trim()) {
-    throw new BackendAnalysisError(400, 'validate_request', 'recordId is required');
-  }
-  if (event.operation !== 'create' && event.operation !== 'update' && event.operation !== 'delete') {
-    throw new BackendAnalysisError(400, 'validate_request', 'operation must be create, update, or delete');
-  }
-  validateSourceKey(event.sourceKey);
-}
-
-function validateSourceKey(sourceKey: ReviewSyncSourceKey | undefined): void {
-  if (!sourceKey || typeof sourceKey !== 'object') {
-    throw new BackendAnalysisError(400, 'validate_request', 'sourceKey is required');
-  }
-  const missing = ['tenantKey', 'sourceKind', 'sourceId', 'baseToken', 'tableId', 'fieldMapping'].filter(
-    (fieldName) => !hasRequiredSourceKeyField(sourceKey, fieldName),
-  );
-  if (missing.length) {
-    throw new BackendAnalysisError(400, 'validate_request', `missing sourceKey fields: ${missing.join(', ')}`);
-  }
-  if (sourceKey.viewId !== undefined && (typeof sourceKey.viewId !== 'string' || !sourceKey.viewId.trim())) {
-    throw new BackendAnalysisError(400, 'validate_request', 'sourceKey.viewId must be a non-empty string when provided');
-  }
-  for (const [fieldName, fieldId] of Object.entries(sourceKey.fieldMapping)) {
-    if (typeof fieldId !== 'string' || !fieldId.trim()) {
-      throw new BackendAnalysisError(400, 'validate_request', `sourceKey.fieldMapping.${fieldName} must be a non-empty string`);
-    }
-  }
-}
-
-function hasRequiredSourceKeyField(sourceKey: ReviewSyncSourceKey, fieldName: string): boolean {
-  const value = sourceKey[fieldName as keyof ReviewSyncSourceKey];
-  if (fieldName === 'fieldMapping') {
-    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-  }
-  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function jsonResponse(body: unknown, status: number): Response {

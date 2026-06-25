@@ -127,6 +127,7 @@ export default function App() {
   const mountedRef = useRef(true);
 
   const isConfigMode = state === 'Create' || state === 'Config';
+  const showCacheDiagnostics = isDemoMode();
   const isCurrentConfigSourceRequest = (requestId?: number) =>
     mountedRef.current && (requestId === undefined || configSourceRequestId.current === requestId);
 
@@ -937,6 +938,7 @@ export default function App() {
       scopeWarning={scopeWarning}
       stale={stale}
       warmupStatus={null}
+      showCacheDiagnostics={showCacheDiagnostics}
       onFilterChange={handleFilterChange}
       onPeriodChange={handlePeriodChange}
       onUpdate={handleUpdateAnalysis}
@@ -966,6 +968,14 @@ export default function App() {
       />
     </div>
   );
+}
+
+function isDemoMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const demo = new URLSearchParams(window.location.search).get('demo');
+  return demo === '1' || demo === 'true';
 }
 
 function readRecordsForConfig(runtime: DashboardRuntime, pluginConfig: PluginConfig): Promise<ReviewRecord[]> {
@@ -1026,7 +1036,6 @@ function buildBackendSourceId(pluginConfig: PluginConfig): string {
   return [
     pluginConfig.backend.baseToken.trim(),
     pluginConfig.source.tableId.trim(),
-    pluginConfig.source.viewId?.trim(),
   ].filter(Boolean).join(':');
 }
 

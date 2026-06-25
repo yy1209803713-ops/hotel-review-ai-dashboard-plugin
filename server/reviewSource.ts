@@ -180,7 +180,7 @@ function toReviewRecord(
 }
 
 function buildFeishuSourceId(query: ReviewSourceQuery): string {
-  return [query.baseToken, query.tableId, query.viewId].filter(isNonEmptyString).join(':') || 'feishu_base';
+  return [query.baseToken, query.tableId].filter(isNonEmptyString).join(':') || 'feishu_base';
 }
 
 function finalizeMetrics(metrics: ReviewSourceMetrics, startedAt: number, finishedAt: number): ReviewSourceMetrics {

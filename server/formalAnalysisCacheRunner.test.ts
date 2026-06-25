@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createFormalAnalysisCacheRunner } from './formalAnalysisCacheRunner';
+import { GLOBAL_REVIEW_SOURCE_TENANT_KEY } from './reviewSync';
 import type { ReviewRecord } from './reviewSource';
 import type {
   AnalysisCacheRepository,
@@ -301,7 +302,7 @@ describe('createFormalAnalysisCacheRunner', () => {
     expect(analyzeBatchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it('hits DB-backed caches when a single hotel reruns after the same date range all-hotel analysis', async () => {
+  it('hits DB-backed caches with global canonical source identity when a single hotel reruns after all-hotel analysis', async () => {
     const cacheRepository = createMemoryAnalysisCacheRepository();
     const analyzeBatchImpl = vi.fn(async ({ records }) => ({
       evidenceItems: records.map((record) => ({
@@ -352,7 +353,7 @@ describe('createFormalAnalysisCacheRunner', () => {
         tableId: 'tbl-review',
         viewId: 'vew-active',
         sourceConfig: {
-          sourceId: 'base-a:tbl-review:vew-active',
+          sourceId: 'base-a:tbl-review',
           upstreamSourceKind: 'feishu_base',
         },
         fieldMapping: {},
@@ -372,7 +373,7 @@ describe('createFormalAnalysisCacheRunner', () => {
         tableId: 'tbl-review',
         viewId: 'vew-active',
         sourceConfig: {
-          sourceId: 'base-a:tbl-review:vew-active',
+          sourceId: 'base-a:tbl-review',
           upstreamSourceKind: 'feishu_base',
         },
         fieldMapping: {},
@@ -385,10 +386,38 @@ describe('createFormalAnalysisCacheRunner', () => {
     expect(analyzeBatchImpl).toHaveBeenCalledTimes(1);
     expect(mergeTopicsImpl).toHaveBeenCalledTimes(1);
     expect(cacheRepository.readEvidenceCache).toHaveBeenLastCalledWith(expect.objectContaining({
+      tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
       sourceKind: 'feishu_base',
-      sourceId: 'base-a:tbl-review:vew-active',
+      sourceId: 'base-a:tbl-review',
       records: [expect.objectContaining({ recordId: 'rec-a' })],
     }));
+    expect(cacheRepository.readTopicMappingCache).toHaveBeenLastCalledWith(expect.objectContaining({
+      tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
+      sourceKind: 'feishu_base',
+      sourceId: 'base-a:tbl-review',
+    }));
+    expect(result.summary).toMatchObject({
+      cacheDiagnostics: {
+        triggered: true,
+        layers: ['evidence_cache', 'topic_mapping_cache'],
+        evidenceCache: {
+          requested: 1,
+          hits: 1,
+          misses: 0,
+          hitRate: 1,
+        },
+        topicMappingCache: {
+          requested: 1,
+          hits: 1,
+          misses: 0,
+          hitRate: 1,
+        },
+        aiTriggered: {
+          evidenceExtraction: false,
+          topicMapping: false,
+        },
+      },
+    });
     expect(result.evidenceByTopic).toMatchObject({
       位置便利: [expect.objectContaining({ recordId: 'rec-a', quote: '位置很好' })],
     });

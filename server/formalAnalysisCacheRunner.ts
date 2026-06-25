@@ -11,6 +11,7 @@ import {
   EVIDENCE_CACHE_EXTRACTOR_VERSION,
   resolveAnalysisCacheSourceIdentity,
   type AnalysisCacheRepository,
+  type AnalysisTopicMappingCacheReadResult,
 } from './postgresAnalysisCache';
 
 type FormalAnalysisCacheRuntimeEnv = AiRuntimeEnv;
@@ -21,6 +22,27 @@ export type FormalAnalysisCacheRunnerOptions = {
   mergeTopicsImpl?: MergeTopicsImpl;
   now?: () => string;
   cacheRepository?: AnalysisCacheRepository;
+};
+
+export type FormalAnalysisCacheDiagnostics = {
+  triggered: boolean;
+  layers: Array<'evidence_cache' | 'topic_mapping_cache'>;
+  evidenceCache: {
+    requested: number;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  };
+  topicMappingCache: {
+    requested: number;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  };
+  aiTriggered: {
+    evidenceExtraction: boolean;
+    topicMapping: boolean;
+  };
 };
 
 export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunnerOptions = {}): AnalysisRunner {
@@ -61,6 +83,7 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           cachedEvidenceItemCount: evidenceCache.hits.reduce((sum, hit) => sum + hit.evidenceItems.length, 0),
         }),
       );
+      let topicMappingCacheUsage: TopicMappingCacheUsageAggregate | undefined;
       const result = await runAnalysis({
         records: pipelineRecords,
         config,
@@ -107,6 +130,7 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
             candidates,
             now,
           });
+          topicMappingCacheUsage = mergeTopicMappingCacheUsage(topicMappingCacheUsage, cache);
           return {
             cachedMappings: cache.hits.map((hit) => hit.mapping),
             cachedCandidates: cache.hits.map((hit) => hit.candidate),
@@ -137,9 +161,14 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           });
         },
       });
+      const cacheDiagnostics = buildFormalCacheDiagnostics(evidenceCache, topicMappingCacheUsage);
+      const summaryWithDiagnostics = {
+        ...(result as unknown as Record<string, unknown>),
+        cacheDiagnostics,
+      };
 
       return {
-        summary: result as unknown as JsonValue,
+        summary: summaryWithDiagnostics as unknown as JsonValue,
         topics: [...result.positiveTopics, ...result.negativeTopics] as unknown as JsonValue[],
         evidenceByTopic: Object.fromEntries(
           [...result.positiveTopics, ...result.negativeTopics].map((topic) => [
@@ -157,6 +186,55 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
       };
     },
   };
+}
+
+type TopicMappingCacheUsageAggregate = {
+  requested: number;
+  hits: number;
+  misses: number;
+};
+
+function mergeTopicMappingCacheUsage(
+  current: TopicMappingCacheUsageAggregate | undefined,
+  cache: AnalysisTopicMappingCacheReadResult,
+): TopicMappingCacheUsageAggregate {
+  return {
+    requested: (current?.requested ?? 0) + cache.hits.length + cache.misses.length,
+    hits: (current?.hits ?? 0) + cache.hits.length,
+    misses: (current?.misses ?? 0) + cache.misses.length,
+  };
+}
+
+function buildFormalCacheDiagnostics(
+  evidenceCache: { hits: unknown[]; misses: unknown[] },
+  topicMappingCache: TopicMappingCacheUsageAggregate | undefined,
+): FormalAnalysisCacheDiagnostics {
+  const evidenceRequested = evidenceCache.hits.length + evidenceCache.misses.length;
+  const topicRequested = topicMappingCache?.requested ?? 0;
+  return {
+    triggered: true,
+    layers: ['evidence_cache', 'topic_mapping_cache'],
+    evidenceCache: {
+      requested: evidenceRequested,
+      hits: evidenceCache.hits.length,
+      misses: evidenceCache.misses.length,
+      hitRate: hitRate(evidenceCache.hits.length, evidenceRequested),
+    },
+    topicMappingCache: {
+      requested: topicRequested,
+      hits: topicMappingCache?.hits ?? 0,
+      misses: topicMappingCache?.misses ?? 0,
+      hitRate: hitRate(topicMappingCache?.hits ?? 0, topicRequested),
+    },
+    aiTriggered: {
+      evidenceExtraction: evidenceCache.misses.length > 0,
+      topicMapping: (topicMappingCache?.misses ?? 0) > 0,
+    },
+  };
+}
+
+function hitRate(hits: number, requested: number): number {
+  return requested > 0 ? hits / requested : 0;
 }
 
 function readFilterState(value: JsonValue | undefined): FilterState {

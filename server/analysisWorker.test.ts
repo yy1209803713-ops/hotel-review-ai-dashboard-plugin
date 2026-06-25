@@ -444,7 +444,7 @@ class FakeReviewSource implements ReviewSource {
   }
 
   async getSourceVersion(query: ReviewSourceQuery, reviews = this.reviews): Promise<SourceVersion> {
-    const sourceId = `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`;
+    const sourceId = `${query.baseToken}:${query.tableId}`;
     const contentHash = reviews.map((item) => `${item.recordId}:${item.contentHash}`).join('|') || 'empty';
     return {
       kind: 'feishu_base',
@@ -480,7 +480,7 @@ class SingleReadChangingReviewSource implements ReviewSource {
       }
       return {
         kind: 'feishu_base',
-        sourceId: `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`,
+        sourceId: `${query.baseToken}:${query.tableId}`,
         version: 'source-preflight',
         contentHash: 'preflight',
         generatedAt: 'fake-now',
@@ -490,7 +490,7 @@ class SingleReadChangingReviewSource implements ReviewSource {
     const contentHash = reviews.map((item) => `${item.recordId}:${item.contentHash}`).join('|') || 'empty';
     return {
       kind: 'feishu_base',
-      sourceId: `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`,
+      sourceId: `${query.baseToken}:${query.tableId}`,
       version: `source-${contentHash}`,
       contentHash,
       generatedAt: 'fake-now',
@@ -519,7 +519,7 @@ class SourceChangesBeforeWorkerReadSource implements ReviewSource {
     const contentHash = versionReviews.map((item) => `${item.recordId}:${item.contentHash}`).join('|') || 'empty';
     return {
       kind: 'feishu_base',
-      sourceId: `${query.baseToken}:${query.tableId}:${query.viewId ?? ''}`,
+      sourceId: `${query.baseToken}:${query.tableId}`,
       version: `source-${contentHash}`,
       contentHash,
       generatedAt: 'fake-now',

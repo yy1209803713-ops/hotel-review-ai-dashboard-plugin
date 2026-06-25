@@ -108,4 +108,23 @@ export type AnalysisResult = {
   positiveTopics: TopicSummary[];
   negativeTopics: TopicSummary[];
   actionItems: ActionItem[];
+  cacheDiagnostics?: AnalysisCacheDiagnostics;
+};
+
+export type AnalysisCacheDiagnostics = {
+  triggered: boolean;
+  layers: Array<'evidence_cache' | 'topic_mapping_cache'>;
+  evidenceCache: CacheLayerDiagnostics;
+  topicMappingCache: CacheLayerDiagnostics;
+  aiTriggered: {
+    evidenceExtraction: boolean;
+    topicMapping: boolean;
+  };
+};
+
+export type CacheLayerDiagnostics = {
+  requested: number;
+  hits: number;
+  misses: number;
+  hitRate: number;
 };

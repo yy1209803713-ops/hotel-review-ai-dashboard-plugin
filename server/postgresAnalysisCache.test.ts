@@ -7,7 +7,30 @@ import {
   EVIDENCE_CACHE_EXTRACTOR_VERSION,
   TOPIC_MAPPING_CACHE_VERSION,
   createPostgresAnalysisCacheRepository,
+  resolveAnalysisCacheSourceIdentity,
 } from './postgresAnalysisCache';
+import { GLOBAL_REVIEW_SOURCE_TENANT_KEY } from './reviewSync';
+
+describe('resolveAnalysisCacheSourceIdentity', () => {
+  it('uses global tenant and baseToken:tableId even when query has tenant and viewId', () => {
+    expect(resolveAnalysisCacheSourceIdentity({
+      tenantKey: 'runtime-tenant',
+      baseToken: 'base-a',
+      tableId: 'tbl-review',
+      viewId: 'vew-active',
+      fieldMapping: {},
+      sourceConfig: {
+        sourceId: 'base-a:tbl-review:vew-active',
+        upstreamSourceKind: 'feishu_base',
+      },
+    })).toEqual({
+      tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
+      sourceKind: 'feishu_base',
+      sourceId: 'base-a:tbl-review',
+      tableId: 'tbl-review',
+    });
+  });
+});
 
 const migrationSql = readFileSync(resolve('server/migrations/001_backend_owned_analysis.sql'), 'utf8');
 const databaseUrl = process.env.DATABASE_URL?.trim();

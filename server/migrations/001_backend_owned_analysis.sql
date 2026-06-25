@@ -120,7 +120,7 @@ COMMENT ON COLUMN review_source_versions.id IS '版本记录主键。';
 COMMENT ON COLUMN review_source_versions.tenant_key IS '租户标识。';
 COMMENT ON COLUMN review_source_versions.source_kind IS '来源类型。';
 COMMENT ON COLUMN review_source_versions.source_id IS '来源标识。';
-COMMENT ON COLUMN review_source_versions.source_key_hash IS '来源字段映射等上下文的哈希，用于区分同一来源下不同读取口径。';
+COMMENT ON COLUMN review_source_versions.source_key_hash IS '同步字段映射哈希，仅用于审计；不参与原始镜像 identity。';
 COMMENT ON COLUMN review_source_versions.version IS '版本号。';
 COMMENT ON COLUMN review_source_versions.record_count IS '记录数量。';
 COMMENT ON COLUMN review_source_versions.content_hash IS '内容哈希。';
@@ -134,8 +134,47 @@ BEGIN
   END IF;
 END $$;
 
+DO $$
+BEGIN
+  IF to_regclass(current_schema() || '.analysis_results') IS NOT NULL THEN
+    WITH ranked_versions AS (
+      SELECT
+        id,
+        first_value(id) OVER (
+          PARTITION BY tenant_key, source_kind, source_id, version
+          ORDER BY generated_at DESC, created_at DESC, id::text DESC
+        ) AS kept_id,
+        row_number() OVER (
+          PARTITION BY tenant_key, source_kind, source_id, version
+          ORDER BY generated_at DESC, created_at DESC, id::text DESC
+        ) AS row_number
+      FROM review_source_versions
+    )
+    UPDATE analysis_results
+    SET source_version_id = ranked_versions.kept_id
+    FROM ranked_versions
+    WHERE analysis_results.source_version_id = ranked_versions.id
+      AND ranked_versions.row_number > 1;
+  END IF;
+END $$;
+
+DELETE FROM review_source_versions
+WHERE id IN (
+  SELECT id
+  FROM (
+    SELECT
+      id,
+      row_number() OVER (
+        PARTITION BY tenant_key, source_kind, source_id, version
+        ORDER BY generated_at DESC, created_at DESC, id::text DESC
+      ) AS row_number
+    FROM review_source_versions
+  ) ranked_versions
+  WHERE ranked_versions.row_number > 1
+);
+
 CREATE UNIQUE INDEX review_source_versions_source_version_uidx
-  ON review_source_versions (tenant_key, source_kind, source_id, source_key_hash, version);
+  ON review_source_versions (tenant_key, source_kind, source_id, version);
 
 CREATE TABLE IF NOT EXISTS analysis_results (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -151,6 +190,17 @@ CREATE TABLE IF NOT EXISTS analysis_results (
   pipeline_version text NOT NULL,
   result_json jsonb NOT NULL,
   summary_json jsonb NOT NULL,
+  evidence_cache_requested integer NOT NULL DEFAULT 0,
+  evidence_cache_hits integer NOT NULL DEFAULT 0,
+  evidence_cache_misses integer NOT NULL DEFAULT 0,
+  evidence_cache_hit_rate double precision NOT NULL DEFAULT 0,
+  topic_mapping_cache_requested integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_hits integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_misses integer NOT NULL DEFAULT 0,
+  topic_mapping_cache_hit_rate double precision NOT NULL DEFAULT 0,
+  ai_called boolean NOT NULL DEFAULT false,
+  ai_evidence_extraction_called boolean NOT NULL DEFAULT false,
+  ai_topic_mapping_called boolean NOT NULL DEFAULT false,
   generated_at timestamptz NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -159,6 +209,33 @@ CREATE INDEX IF NOT EXISTS analysis_results_latest_idx
   ON analysis_results (tenant_key, base_user_id, plugin_instance_id, scope_key, generated_at DESC);
 
 ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS evidence_cache_requested integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS evidence_cache_hits integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS evidence_cache_misses integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS evidence_cache_hit_rate double precision NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS topic_mapping_cache_requested integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS topic_mapping_cache_hits integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS topic_mapping_cache_misses integer NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS topic_mapping_cache_hit_rate double precision NOT NULL DEFAULT 0;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS ai_called boolean NOT NULL DEFAULT false;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS ai_evidence_extraction_called boolean NOT NULL DEFAULT false;
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS ai_topic_mapping_called boolean NOT NULL DEFAULT false;
+
+UPDATE analysis_results
+SET
+  evidence_cache_requested = COALESCE((summary_json #>> '{cacheDiagnostics,evidenceCache,requested}')::integer, evidence_cache_requested),
+  evidence_cache_hits = COALESCE((summary_json #>> '{cacheDiagnostics,evidenceCache,hits}')::integer, evidence_cache_hits),
+  evidence_cache_misses = COALESCE((summary_json #>> '{cacheDiagnostics,evidenceCache,misses}')::integer, evidence_cache_misses),
+  evidence_cache_hit_rate = COALESCE((summary_json #>> '{cacheDiagnostics,evidenceCache,hitRate}')::double precision, evidence_cache_hit_rate),
+  topic_mapping_cache_requested = COALESCE((summary_json #>> '{cacheDiagnostics,topicMappingCache,requested}')::integer, topic_mapping_cache_requested),
+  topic_mapping_cache_hits = COALESCE((summary_json #>> '{cacheDiagnostics,topicMappingCache,hits}')::integer, topic_mapping_cache_hits),
+  topic_mapping_cache_misses = COALESCE((summary_json #>> '{cacheDiagnostics,topicMappingCache,misses}')::integer, topic_mapping_cache_misses),
+  topic_mapping_cache_hit_rate = COALESCE((summary_json #>> '{cacheDiagnostics,topicMappingCache,hitRate}')::double precision, topic_mapping_cache_hit_rate),
+  ai_evidence_extraction_called = COALESCE((summary_json #>> '{cacheDiagnostics,aiTriggered,evidenceExtraction}')::boolean, ai_evidence_extraction_called),
+  ai_topic_mapping_called = COALESCE((summary_json #>> '{cacheDiagnostics,aiTriggered,topicMapping}')::boolean, ai_topic_mapping_called),
+  ai_called = COALESCE((summary_json #>> '{cacheDiagnostics,aiTriggered,evidenceExtraction}')::boolean, ai_evidence_extraction_called)
+    OR COALESCE((summary_json #>> '{cacheDiagnostics,aiTriggered,topicMapping}')::boolean, ai_topic_mapping_called)
+WHERE summary_json ? 'cacheDiagnostics';
 
 COMMENT ON TABLE analysis_results IS '分析结果表，保存一次任务输出的明细结果和摘要。';
 COMMENT ON COLUMN analysis_results.id IS '结果主键。';
@@ -174,6 +251,17 @@ COMMENT ON COLUMN analysis_results.model IS '使用的模型标识。';
 COMMENT ON COLUMN analysis_results.pipeline_version IS '分析流水线版本。';
 COMMENT ON COLUMN analysis_results.result_json IS '分析结果明细，JSON 格式。';
 COMMENT ON COLUMN analysis_results.summary_json IS '分析摘要，JSON 格式。';
+COMMENT ON COLUMN analysis_results.evidence_cache_requested IS '本次分析证据缓存请求数量。';
+COMMENT ON COLUMN analysis_results.evidence_cache_hits IS '本次分析证据缓存命中数量。';
+COMMENT ON COLUMN analysis_results.evidence_cache_misses IS '本次分析证据缓存未命中数量。';
+COMMENT ON COLUMN analysis_results.evidence_cache_hit_rate IS '本次分析证据缓存命中率。';
+COMMENT ON COLUMN analysis_results.topic_mapping_cache_requested IS '本次分析主题映射缓存请求数量。';
+COMMENT ON COLUMN analysis_results.topic_mapping_cache_hits IS '本次分析主题映射缓存命中数量。';
+COMMENT ON COLUMN analysis_results.topic_mapping_cache_misses IS '本次分析主题映射缓存未命中数量。';
+COMMENT ON COLUMN analysis_results.topic_mapping_cache_hit_rate IS '本次分析主题映射缓存命中率。';
+COMMENT ON COLUMN analysis_results.ai_called IS '本次分析是否调用过 AI。';
+COMMENT ON COLUMN analysis_results.ai_evidence_extraction_called IS '本次分析是否调用过 AI 证据抽取。';
+COMMENT ON COLUMN analysis_results.ai_topic_mapping_called IS '本次分析是否调用过 AI 主题归并。';
 COMMENT ON COLUMN analysis_results.generated_at IS '结果生成时间。';
 COMMENT ON COLUMN analysis_results.created_at IS '创建时间。';
 
@@ -341,7 +429,7 @@ COMMENT ON COLUMN review_records.id IS '记录主键。';
 COMMENT ON COLUMN review_records.tenant_key IS '租户标识。';
 COMMENT ON COLUMN review_records.source_kind IS '来源类型。';
 COMMENT ON COLUMN review_records.source_id IS '来源标识。';
-COMMENT ON COLUMN review_records.source_key_hash IS '来源字段映射等上下文的哈希，用于区分同一来源下不同读取口径。';
+COMMENT ON COLUMN review_records.source_key_hash IS '同步字段映射哈希，仅用于审计；不参与原始镜像 identity。';
 COMMENT ON COLUMN review_records.base_token IS 'Base 访问令牌。';
 COMMENT ON COLUMN review_records.table_id IS 'Base 表 ID。';
 COMMENT ON COLUMN review_records.record_id IS 'Base 记录 ID。';
@@ -364,11 +452,26 @@ BEGIN
   END IF;
 END $$;
 
+DELETE FROM review_records
+WHERE id IN (
+  SELECT id
+  FROM (
+    SELECT
+      id,
+      row_number() OVER (
+        PARTITION BY tenant_key, source_kind, source_id, record_id
+        ORDER BY updated_at DESC, created_at DESC, id::text DESC
+      ) AS row_number
+    FROM review_records
+  ) ranked_records
+  WHERE ranked_records.row_number > 1
+);
+
 CREATE UNIQUE INDEX review_records_identity_uidx
-  ON review_records (tenant_key, source_kind, source_id, source_key_hash, record_id);
+  ON review_records (tenant_key, source_kind, source_id, record_id);
 
 CREATE INDEX review_records_source_idx
-  ON review_records (tenant_key, source_kind, source_id, source_key_hash, is_deleted, synced_at DESC);
+  ON review_records (tenant_key, source_kind, source_id, is_deleted, synced_at DESC);
 
 CREATE TABLE IF NOT EXISTS sync_jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -380,16 +483,19 @@ CREATE TABLE IF NOT EXISTS sync_jobs (
   view_id text,
   field_mapping_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   source_key_hash text NOT NULL DEFAULT '',
-  trigger_type text NOT NULL CHECK (trigger_type IN ('event', 'schedule', 'manual', 'analysis_preflight')),
+  mode text NOT NULL DEFAULT 'full' CHECK (mode IN ('full', 'incremental')),
+  trigger_type text NOT NULL DEFAULT 'manual_api' CHECK (trigger_type IN ('manual_api')),
   status text NOT NULL CHECK (status IN ('queued', 'running', 'success', 'failed', 'canceled')),
   stage text NOT NULL,
   records_read integer NOT NULL DEFAULT 0,
   records_upserted integer NOT NULL DEFAULT 0,
   records_deleted integer NOT NULL DEFAULT 0,
+  records_unchanged integer NOT NULL DEFAULT 0,
   error_stage text,
   error_message text,
   started_at timestamptz,
   finished_at timestamptz,
+  duration_ms integer,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -402,6 +508,9 @@ ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS table_id text;
 ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS view_id text;
 ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS field_mapping_json jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS source_key_hash text NOT NULL DEFAULT '';
+ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'full';
+ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS records_unchanged integer NOT NULL DEFAULT 0;
+ALTER TABLE sync_jobs ADD COLUMN IF NOT EXISTS duration_ms integer;
 
 COMMENT ON TABLE sync_jobs IS '同步任务表，记录评论同步执行过程、统计与错误信息。';
 COMMENT ON COLUMN sync_jobs.id IS '任务主键。';
@@ -412,17 +521,20 @@ COMMENT ON COLUMN sync_jobs.base_token IS 'Base 访问令牌。';
 COMMENT ON COLUMN sync_jobs.table_id IS 'Base 表 ID。';
 COMMENT ON COLUMN sync_jobs.view_id IS 'Base 视图 ID。';
 COMMENT ON COLUMN sync_jobs.field_mapping_json IS '同步使用的字段映射，JSON 格式。';
-COMMENT ON COLUMN sync_jobs.source_key_hash IS '来源字段映射等上下文的哈希，用于区分同一来源下不同读取口径。';
+COMMENT ON COLUMN sync_jobs.source_key_hash IS '同步字段映射哈希，仅用于审计和历史排查；不参与原始镜像 identity。';
+COMMENT ON COLUMN sync_jobs.mode IS '同步模式：full 全量同步，incremental 扫描飞书全量后只写入差异。';
 COMMENT ON COLUMN sync_jobs.trigger_type IS '触发类型。';
 COMMENT ON COLUMN sync_jobs.status IS '任务状态。';
 COMMENT ON COLUMN sync_jobs.stage IS '当前执行阶段。';
 COMMENT ON COLUMN sync_jobs.records_read IS '读取到的记录数。';
 COMMENT ON COLUMN sync_jobs.records_upserted IS '已写入或更新的记录数。';
 COMMENT ON COLUMN sync_jobs.records_deleted IS '已删除的记录数。';
+COMMENT ON COLUMN sync_jobs.records_unchanged IS '增量同步中判断为未变化的记录数。';
 COMMENT ON COLUMN sync_jobs.error_stage IS '出错阶段。';
 COMMENT ON COLUMN sync_jobs.error_message IS '错误信息。';
 COMMENT ON COLUMN sync_jobs.started_at IS '开始时间。';
 COMMENT ON COLUMN sync_jobs.finished_at IS '结束时间。';
+COMMENT ON COLUMN sync_jobs.duration_ms IS '任务耗时，单位毫秒。';
 COMMENT ON COLUMN sync_jobs.created_at IS '创建时间。';
 COMMENT ON COLUMN sync_jobs.updated_at IS '更新时间。';
 
@@ -444,10 +556,12 @@ BEGIN
 END $$;
 
 CREATE UNIQUE INDEX sync_jobs_active_source_trigger_uidx
-  ON sync_jobs (tenant_key, source_kind, source_id, trigger_type, source_key_hash)
+  ON sync_jobs (tenant_key, source_kind, source_id, mode)
   WHERE status IN ('queued', 'running');
 
 ALTER TABLE sync_jobs DROP CONSTRAINT IF EXISTS sync_jobs_status_check;
+ALTER TABLE sync_jobs DROP CONSTRAINT IF EXISTS sync_jobs_trigger_type_check;
+ALTER TABLE sync_jobs DROP CONSTRAINT IF EXISTS sync_jobs_mode_check;
 
 UPDATE sync_jobs
 SET status = CASE
@@ -457,9 +571,21 @@ SET status = CASE
 END
 WHERE status IN ('succeeded', 'cancelled');
 
+UPDATE sync_jobs
+SET trigger_type = 'manual_api'
+WHERE trigger_type <> 'manual_api';
+
 ALTER TABLE sync_jobs
   ADD CONSTRAINT sync_jobs_status_check
   CHECK (status IN ('queued', 'running', 'success', 'failed', 'canceled'));
+
+ALTER TABLE sync_jobs
+  ADD CONSTRAINT sync_jobs_trigger_type_check
+  CHECK (trigger_type IN ('manual_api'));
+
+ALTER TABLE sync_jobs
+  ADD CONSTRAINT sync_jobs_mode_check
+  CHECK (mode IN ('full', 'incremental'));
 
 CREATE TABLE IF NOT EXISTS schedules (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

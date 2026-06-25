@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { createInMemoryReviewSyncStore, createPostgresReviewSyncStore } from './postgresReviewSyncStore';
 import { PostgresReviewSource } from './postgresReviewSource';
-import { ReviewSyncService, type ReviewSyncSourceKey } from './reviewSync';
+import { GLOBAL_REVIEW_SOURCE_TENANT_KEY, ReviewSyncService, type ReviewSyncSourceKey } from './reviewSync';
 import { handleReviewSyncRequest } from './syncHandler';
 import type { ReviewRecord, ReviewSource, ReviewSourceQuery } from './reviewSource';
 import type { SourceVersion } from './backendAnalysis';
 
 const sourceKey: ReviewSyncSourceKey = {
-  tenantKey: 'tenant-a',
+  tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
   sourceKind: 'feishu_base',
-  sourceId: 'base-token-a:tbl-review:vew-active',
+  sourceId: 'base-token-a:tbl-review',
   baseToken: 'base-token-a',
   tableId: 'tbl-review',
-  viewId: 'vew-active',
   fieldMapping: {
     content: 'fld-review',
     rating: 'fld-rating',
@@ -21,7 +20,7 @@ const sourceKey: ReviewSyncSourceKey = {
 };
 
 describe('ReviewSyncService and PostgresReviewSource', () => {
-  it('seeds the read model, applies event updates, soft-deletes removed records, and advances source versions', async () => {
+  it('seeds the global read model with full sync, applies incremental diffs, and records duration', async () => {
     const store = createInMemoryReviewSyncStore();
     const feishuSource = new MutableReviewSource([
       review('rec-1', 'Great view', 5),
@@ -47,14 +46,17 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
     const postgresSource = new PostgresReviewSource({ store });
 
-    const fullSync = await syncService.runFullSync(sourceKey, 'manual');
+    const fullSync = await syncService.runFullSync(sourceKey);
 
     expect(fullSync).toMatchObject({
       status: 'success',
-      triggerType: 'manual',
+      mode: 'full',
+      triggerType: 'manual_api',
       recordsRead: 2,
       recordsUpserted: 2,
       recordsDeleted: 0,
+      recordsUnchanged: 0,
+      durationMs: 59000,
     });
     await expect(postgresSource.listReviews(toQuery(sourceKey))).resolves.toEqual([
       review('rec-1', 'Great view', 5),
@@ -63,7 +65,7 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     const firstVersion = await postgresSource.getSourceVersion(toQuery(sourceKey));
     expect(firstVersion).toMatchObject({
       kind: 'postgres',
-      sourceId: 'base-token-a:tbl-review:vew-active',
+      sourceId: 'base-token-a:tbl-review',
       recordCount: 2,
       generatedAt: '2026-06-23T08:01:00.000Z',
     });
@@ -71,19 +73,18 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     feishuSource.replace([
       review('rec-1', 'Great view after renovation', 5),
       review('rec-2', 'Noisy room', 2),
+      review('rec-3', 'Kind staff', 5),
     ]);
-    const eventJob = await syncService.handleFeishuRecordChangedEvent({
-      sourceKey,
-      recordId: 'rec-1',
-      operation: 'update',
-    });
+    const incrementalJob = await syncService.runIncrementalSync(sourceKey);
 
-    expect(eventJob).toMatchObject({
+    expect(incrementalJob).toMatchObject({
       status: 'success',
-      triggerType: 'event',
-      recordsRead: 2,
+      mode: 'incremental',
+      triggerType: 'manual_api',
+      recordsRead: 3,
       recordsUpserted: 2,
       recordsDeleted: 0,
+      recordsUnchanged: 1,
     });
     await expect(store.getReviewRecord(sourceKey, 'rec-1')).resolves.toMatchObject({
       recordId: 'rec-1',
@@ -96,7 +97,7 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
 
     feishuSource.replace([review('rec-1', 'Great view after renovation', 5)]);
-    await syncService.runFullSync(sourceKey, 'schedule');
+    await syncService.runIncrementalSync(sourceKey);
 
     await expect(postgresSource.listReviews(toQuery(sourceKey))).resolves.toEqual([
       review('rec-1', 'Great view after renovation', 5),
@@ -110,7 +111,7 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     expect(latestVersion.version).not.toBe(firstVersion.version);
   });
 
-  it('enqueues Feishu record-changed events from the HTTP receiver and returns before worker sync runs', async () => {
+  it('enqueues full and incremental sync from HTTP receivers using global tenant and canonical source id', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({
       store,
@@ -119,13 +120,15 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
     const enqueued: Array<{ jobId: string; sourceKey: ReviewSyncSourceKey }> = [];
 
-    const response = await handleReviewSyncRequest(
-      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/feishu/record-changed', {
+    const fullResponse = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/full', {
         method: 'POST',
         body: JSON.stringify({
-          sourceKey,
-          recordId: 'rec-1',
-          operation: 'update',
+          tenantKey: 'caller-tenant-must-be-ignored',
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          viewId: 'vew-active-must-not-enter-source-id',
+          fieldMapping: sourceKey.fieldMapping,
         }),
       }),
       {
@@ -136,14 +139,72 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
       },
     );
 
-    await expect(response.json()).resolves.toMatchObject({
+    await expect(fullResponse.json()).resolves.toMatchObject({
       jobId: 'sync-job-1',
+      mode: 'full',
       status: 'queued',
-      triggerType: 'event',
+      triggerType: 'manual_api',
+      tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
+      sourceId: 'base-token-a:tbl-review',
     });
-    expect(response.status).toBe(202);
+    expect(fullResponse.status).toBe(202);
     expect(enqueued).toEqual([{ jobId: 'sync-job-1', sourceKey }]);
     await expect(store.listReviewRecords(sourceKey)).resolves.toEqual([]);
+
+    const incrementalResponse = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          fieldMapping: sourceKey.fieldMapping,
+        }),
+      }),
+      {
+        service: syncService,
+        onSyncJobCreated(jobId, enqueuedSourceKey) {
+          enqueued.push({ jobId, sourceKey: enqueuedSourceKey });
+        },
+      },
+    );
+
+    await expect(incrementalResponse.json()).resolves.toMatchObject({
+      jobId: 'sync-job-2',
+      mode: 'incremental',
+      status: 'queued',
+      triggerType: 'manual_api',
+      tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
+      sourceId: 'base-token-a:tbl-review',
+    });
+    expect(incrementalResponse.status).toBe(202);
+    expect(enqueued[1]).toEqual({ jobId: 'sync-job-2', sourceKey });
+  });
+
+  it('removes Feishu record-changed HTTP receiver so events no longer enqueue sync jobs', async () => {
+    const store = createInMemoryReviewSyncStore();
+    const syncService = new ReviewSyncService({
+      store,
+      sourceReaders: { feishu_base: new MutableReviewSource([review('rec-1', 'Great view', 5)]) },
+    });
+    const enqueued: Array<{ jobId: string; sourceKey: ReviewSyncSourceKey }> = [];
+
+    const response = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/feishu/record-changed', {
+        method: 'POST',
+        body: JSON.stringify({ sourceKey, recordId: 'rec-1', operation: 'update' }),
+      }),
+      {
+        service: syncService,
+        onSyncJobCreated(jobId, enqueuedSourceKey) {
+          enqueued.push({ jobId, sourceKey: enqueuedSourceKey });
+        },
+      },
+    );
+
+    await expect(response.json()).resolves.toEqual({ stage: 'validate_request', message: 'not found' });
+    expect(response.status).toBe(404);
+    expect(enqueued).toEqual([]);
+    await expect(store.listReplayableSyncJobs(10)).resolves.toEqual([]);
   });
 
   it('responds to browser CORS preflight for sync endpoints', async () => {
@@ -154,7 +215,7 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
 
     const response = await handleReviewSyncRequest(
-      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/feishu/record-changed', { method: 'OPTIONS' }),
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/full', { method: 'OPTIONS' }),
       { service: syncService },
     );
 
@@ -176,18 +237,19 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
       ]),
     });
 
-    const queued = await syncService.enqueueSyncJob(sourceKey, 'manual');
+    const queued = await syncService.enqueueSyncJob(sourceKey, 'full', 'manual_api');
 
     expect(queued.sourceKey).toEqual(sourceKey);
     await expect(store.getSyncJob(queued.jobId)).resolves.toMatchObject({ sourceKey });
     await expect(store.listReplayableSyncJobs(10)).resolves.toEqual([expect.objectContaining({ jobId: queued.jobId, sourceKey })]);
     await expect(syncService.runQueuedSyncJob(queued.jobId)).resolves.toMatchObject({
       status: 'success',
+      mode: 'full',
       recordsRead: 1,
     });
   });
 
-  it('deduplicates active jobs for the same source and trigger without hiding job stage or message', async () => {
+  it('deduplicates active jobs for the same source and mode without hiding job stage or message', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({
       store,
@@ -195,16 +257,16 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
       now: createClock(['2026-06-23T08:00:00.000Z', '2026-06-23T08:00:01.000Z']),
     });
 
-    const first = await syncService.enqueueSyncJob(sourceKey, 'event');
-    const second = await syncService.enqueueSyncJob(sourceKey, 'event');
-    const manual = await syncService.enqueueSyncJob(sourceKey, 'manual');
+    const first = await syncService.enqueueSyncJob(sourceKey, 'incremental', 'manual_api');
+    const second = await syncService.enqueueSyncJob(sourceKey, 'incremental', 'manual_api');
+    const full = await syncService.enqueueSyncJob(sourceKey, 'full', 'manual_api');
 
     expect(second).toEqual(first);
-    expect(manual.jobId).not.toBe(first.jobId);
+    expect(full.jobId).not.toBe(first.jobId);
     await expect(store.listReplayableSyncJobs(10)).resolves.toHaveLength(2);
   });
 
-  it('creates distinct active jobs when fieldMapping differs for the same source and trigger', async () => {
+  it('deduplicates active jobs for the same source and mode even when fieldMapping differs', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({
       store,
@@ -219,16 +281,16 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
       },
     };
 
-    const first = await syncService.enqueueSyncJob(sourceKey, 'event');
-    const second = await syncService.enqueueSyncJob(alternateSourceKey, 'event');
-    const duplicate = await syncService.enqueueSyncJob(alternateSourceKey, 'event');
+    const first = await syncService.enqueueSyncJob(sourceKey, 'incremental', 'manual_api');
+    const second = await syncService.enqueueSyncJob(alternateSourceKey, 'incremental', 'manual_api');
+    const duplicate = await syncService.enqueueSyncJob(alternateSourceKey, 'incremental', 'manual_api');
 
-    expect(second.jobId).not.toBe(first.jobId);
-    expect(duplicate).toEqual(second);
-    await expect(store.listReplayableSyncJobs(10)).resolves.toHaveLength(2);
+    expect(second).toEqual(first);
+    expect(duplicate).toEqual(first);
+    await expect(store.listReplayableSyncJobs(10)).resolves.toHaveLength(1);
   });
 
-  it('keeps records, source versions, and soft-delete scoped to fieldMapping identity for the same source', async () => {
+  it('keeps one canonical read model for the same source when fieldMapping changes', async () => {
     const store = createInMemoryReviewSyncStore();
     const alternateSourceKey: ReviewSyncSourceKey = {
       ...sourceKey,
@@ -264,14 +326,14 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     });
     const postgresSource = new PostgresReviewSource({ store });
 
-    await syncService.runFullSync(sourceKey, 'manual');
-    await syncService.runFullSync(alternateSourceKey, 'manual');
+    await syncService.runFullSync(sourceKey);
+    await syncService.runFullSync(alternateSourceKey);
 
     await expect(postgresSource.listReviews(toQuery(sourceKey))).resolves.toEqual([
       expect.objectContaining({
         recordId: 'rec-1',
-        content: 'Primary mapping review',
-        mappedFields: expect.objectContaining({ content: 'Primary mapping review', rating: 5 }),
+        content: 'Alternate mapping review',
+        mappedFields: expect.objectContaining({ content: 'Alternate mapping review', rating: 4 }),
       }),
     ]);
     await expect(postgresSource.listReviews(toQuery(alternateSourceKey))).resolves.toEqual([
@@ -284,59 +346,15 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
 
     const primaryVersion = await postgresSource.getSourceVersion(toQuery(sourceKey));
     const alternateVersion = await postgresSource.getSourceVersion(toQuery(alternateSourceKey));
-    expect(primaryVersion.contentHash).not.toBe(alternateVersion.contentHash);
+    expect(primaryVersion.contentHash).toBe(alternateVersion.contentHash);
     expect(primaryVersion.recordCount).toBe(1);
     expect(alternateVersion.recordCount).toBe(1);
 
     fieldAwareSource.replace(sourceKey.fieldMapping.content, []);
-    await syncService.runFullSync(sourceKey, 'schedule');
+    await syncService.runFullSync(sourceKey);
 
     await expect(postgresSource.listReviews(toQuery(sourceKey))).resolves.toEqual([]);
-    await expect(postgresSource.listReviews(toQuery(alternateSourceKey))).resolves.toEqual([
-      expect.objectContaining({
-        recordId: 'rec-1',
-        content: 'Alternate mapping review',
-      }),
-    ]);
-  });
-
-  it('confirms delete events with a source read before soft-deleting records', async () => {
-    const store = createInMemoryReviewSyncStore();
-    const feishuSource = new MutableReviewSource([review('rec-1', 'Still present', 5)]);
-    const syncService = new ReviewSyncService({
-      store,
-      sourceReaders: { feishu_base: feishuSource },
-      now: createClock([
-        '2026-06-23T08:00:00.000Z',
-        '2026-06-23T08:00:01.000Z',
-        '2026-06-23T08:00:02.000Z',
-        '2026-06-23T08:00:03.000Z',
-        '2026-06-23T08:01:00.000Z',
-        '2026-06-23T08:01:01.000Z',
-        '2026-06-23T08:01:02.000Z',
-        '2026-06-23T08:01:03.000Z',
-        '2026-06-23T08:02:00.000Z',
-        '2026-06-23T08:02:01.000Z',
-        '2026-06-23T08:02:02.000Z',
-        '2026-06-23T08:02:03.000Z',
-      ]),
-    });
-
-    await syncService.runFullSync(sourceKey, 'manual');
-    await syncService.handleFeishuRecordChangedEvent({ sourceKey, recordId: 'rec-1', operation: 'delete' });
-
-    await expect(store.getReviewRecord(sourceKey, 'rec-1')).resolves.toMatchObject({
-      recordId: 'rec-1',
-      isDeleted: false,
-    });
-
-    feishuSource.replace([]);
-    await syncService.handleFeishuRecordChangedEvent({ sourceKey, recordId: 'rec-1', operation: 'delete' });
-
-    await expect(store.getReviewRecord(sourceKey, 'rec-1')).resolves.toMatchObject({
-      recordId: 'rec-1',
-      isDeleted: true,
-    });
+    await expect(postgresSource.listReviews(toQuery(alternateSourceKey))).resolves.toEqual([]);
   });
 
   it('restores Postgres read-model content from reviewText when content is absent', async () => {
@@ -363,22 +381,22 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     ]);
   });
 
-  it('validates full receiver sourceKey shape and reports validate_request for missing sourceKey and unknown route', async () => {
+  it('validates sync receiver source payload and reports validate_request for missing fields and unknown route', async () => {
     const syncService = new ReviewSyncService({
       store: createInMemoryReviewSyncStore(),
       sourceReaders: { feishu_base: new MutableReviewSource([]) },
     });
 
     const missingSourceKey = await handleReviewSyncRequest(
-      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/feishu/record-changed', {
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/full', {
         method: 'POST',
-        body: JSON.stringify({ recordId: 'rec-1', operation: 'update' }),
+        body: JSON.stringify({ tableId: 'tbl-review', fieldMapping: sourceKey.fieldMapping }),
       }),
       { service: syncService },
     );
     await expect(missingSourceKey.json()).resolves.toMatchObject({
       stage: 'validate_request',
-      message: 'sourceKey is required',
+      message: 'missing sync source fields: baseToken',
     });
     expect(missingSourceKey.status).toBe(400);
 
@@ -388,6 +406,21 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     );
     await expect(notFound.json()).resolves.toEqual({ stage: 'validate_request', message: 'not found' });
     expect(notFound.status).toBe(404);
+
+    const manual = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/manual', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: 'incremental',
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          fieldMapping: sourceKey.fieldMapping,
+        }),
+      }),
+      { service: syncService },
+    );
+    await expect(manual.json()).resolves.toEqual({ stage: 'validate_request', message: 'not found' });
+    expect(manual.status).toBe(404);
   });
 
   it('wraps Postgres record/version/job success writes in a transaction', async () => {
@@ -401,13 +434,16 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
         tenantKey: sourceKey.tenantKey,
         sourceKind: sourceKey.sourceKind,
         sourceId: sourceKey.sourceId,
-        triggerType: 'manual',
+        mode: 'full',
+        triggerType: 'manual_api',
         status: 'running',
         stage: 'write_records',
         recordsRead: 1,
         recordsUpserted: 0,
         recordsDeleted: 0,
+        recordsUnchanged: 0,
         createdAt: '2026-06-23T08:00:00.000Z',
+        startedAt: '2026-06-23T08:00:01.000Z',
         updatedAt: '2026-06-23T08:00:01.000Z',
       },
       sourceKey,
@@ -426,9 +462,10 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     expect(client.statements).toContain('BEGIN');
     expect(client.statements).toContain('COMMIT');
     expect(client.statements).not.toContain('ROLLBACK');
+    expect(client.sqlLog.join('\n')).toContain('duration_ms');
   });
 
-  it('uses source_key_hash in Postgres read-model record and version identity SQL', async () => {
+  it('does not use source_key_hash in Postgres read-model record and version identity SQL', async () => {
     const client = new RecordingPostgresClient();
     const store = createPostgresReviewSyncStore(client);
 
@@ -460,12 +497,12 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     await store.getLatestSourceVersion(sourceKey);
 
     const sql = client.sqlLog.join('\n');
-    expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, source_key_hash, record_id)');
-    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4 and is_deleted = false');
-    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4 and record_id = $5');
-    expect(sql).toContain('and source_key_hash = $4');
-    expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, source_key_hash, version)');
-    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and source_key_hash = $4');
+    expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, record_id)');
+    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and is_deleted = false');
+    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3 and record_id = $4');
+    expect(sql).toContain('on conflict (tenant_key, source_kind, source_id, version)');
+    expect(sql).toContain('where tenant_key = $1 and source_kind = $2 and source_id = $3');
+    expect(sql).not.toContain('source_key_hash = $4');
   });
 });
 
@@ -517,7 +554,7 @@ class MutableReviewSource implements ReviewSource {
     const contentHash = reviews.map((reviewRecord) => reviewRecord.contentHash).sort().join('|');
     return {
       kind: this.kind,
-      sourceId: [query.baseToken, query.tableId, query.viewId].filter(Boolean).join(':'),
+      sourceId: [query.baseToken, query.tableId].filter(Boolean).join(':'),
       version: `source-${contentHash}`,
       contentHash,
       recordCount: reviews.length,
@@ -547,7 +584,7 @@ class FieldMappingAwareReviewSource implements ReviewSource {
     const contentHash = reviews.map((reviewRecord) => reviewRecord.contentHash).sort().join('|');
     return {
       kind: this.kind,
-      sourceId: [query.baseToken, query.tableId, query.viewId].filter(Boolean).join(':'),
+      sourceId: [query.baseToken, query.tableId].filter(Boolean).join(':'),
       version: `source-${contentHash}`,
       contentHash,
       recordCount: reviews.length,

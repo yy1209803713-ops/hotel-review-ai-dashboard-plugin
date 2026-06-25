@@ -4,7 +4,7 @@ import {
   type SourceVersion,
 } from './backendAnalysis';
 import type { ReviewSyncStore } from './postgresReviewSyncStore';
-import type { ReviewSyncSourceKey } from './reviewSync';
+import { GLOBAL_REVIEW_SOURCE_TENANT_KEY, type ReviewSyncSourceKey } from './reviewSync';
 import type { ReviewRecord, ReviewSource, ReviewSourceQuery } from './reviewSource';
 
 export type PostgresReviewSourceOptions = {
@@ -44,12 +44,11 @@ export class PostgresReviewSource implements ReviewSource {
 function toReadModelSourceKey(query: ReviewSourceQuery): ReviewSyncSourceKey {
   const sourceId = resolveSourceId(query);
   return {
-    tenantKey: requireNonEmptyString(query.tenantKey, 'tenantKey is required for postgres review source'),
+    tenantKey: GLOBAL_REVIEW_SOURCE_TENANT_KEY,
     sourceKind: resolveUpstreamSourceKind(query),
     sourceId,
     baseToken: query.baseToken,
     tableId: query.tableId,
-    viewId: query.viewId,
     fieldMapping: query.fieldMapping,
   };
 }
@@ -60,7 +59,7 @@ function resolveSourceId(query: ReviewSourceQuery): string {
     return configuredSourceId;
   }
 
-  const feishuSourceId = [query.baseToken, query.tableId, query.viewId].filter(isNonEmptyString).join(':');
+  const feishuSourceId = [query.baseToken, query.tableId].filter(isNonEmptyString).join(':');
   if (feishuSourceId) {
     return feishuSourceId;
   }
