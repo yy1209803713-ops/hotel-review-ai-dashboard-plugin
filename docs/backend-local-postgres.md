@@ -71,16 +71,16 @@ npm run server
 - `analysis_results`
 - `analysis_topic_evidence`
 
-插件前端保存配置时会上送 `source.kind: "postgres"`，并把真实上游标成 `upstreamSourceKind: "feishu_base"`。后端收到创建分析任务请求后，会先通过 `analysis_preflight` 跑一次同步，把 Feishu Base 数据写入 `review_records` 和 `review_source_versions`，再用 `PostgresReviewSource` 解析 scope 并创建 job。
+插件前端保存配置时会上送 `source.kind: "postgres"`，并把真实上游标成 `upstreamSourceKind: "feishu_base"`。后端收到创建分析任务请求后只读取 `review_records` / `review_source_versions` 里的既有读模型来解析 scope 并创建 job，不在分析链路里触发同步。
 
 ## 同步接口
 
 ```text
-POST /api/hotel-review-ai/sync/feishu/record-changed
-POST /api/hotel-review-ai/sync/manual
+POST /api/hotel-review-ai/sync/full
+POST /api/hotel-review-ai/sync/incremental
 ```
 
-这两条路由会先做请求校验，再把事件/手动同步转成 `sync_jobs` 里的工作项。它们依赖 `sync_jobs`、`review_records` 和 `review_source_versions` 这三张表。
+同步只通过接口入队，不由分析按钮触发。`/sync/full` 做全量同步，`/sync/incremental` 扫描飞书全量记录后只写入差异。它们依赖 `sync_jobs`、`review_records` 和 `review_source_versions` 这三张表。
 
 ## Read model
 
@@ -113,12 +113,12 @@ curl 'http://127.0.0.1:8797/api/hotel-review-ai/results/latest?tenantKey=tenant-
 
 如果数据库里存在已成功发布的 `analysis_results`，同一个接口应直接返回该结果，不需要重新扫描 Base。
 
-同步事件：
+增量同步：
 
 ```bash
-curl -X POST 'http://127.0.0.1:8797/api/hotel-review-ai/sync/feishu/record-changed' \
+curl -X POST 'http://127.0.0.1:8797/api/hotel-review-ai/sync/incremental' \
   -H 'content-type: application/json' \
-  -d '{"recordId":"rec-1","operation":"update","sourceKey":{"tenantKey":"tenant-a","sourceKind":"feishu_base","sourceId":"base-token-a:tbl-review:vew-active","baseToken":"base-token-a","tableId":"tbl-review","viewId":"vew-active","fieldMapping":{"content":"fld-review","rating":"fld-rating","hotelName":"fld-hotel"}}}'
+  -d '{"baseToken":"base-token-a","tableId":"tbl-review","fieldMapping":{"content":"fld-review","rating":"fld-rating","hotelName":"fld-hotel"}}'
 ```
 
 当前本地 smoke 曾遇到的真实失败边界已经由迁移修复：
@@ -127,9 +127,9 @@ curl -X POST 'http://127.0.0.1:8797/api/hotel-review-ai/sync/feishu/record-chang
 {"error":"internal server error"}
 ```
 
-重放迁移后，旧表会自动补上 `base_token`、`table_id`、`view_id`、`field_mapping_json`，并把 `sync_jobs_status_check` 升级到当前状态集合。这样 `POST /api/hotel-review-ai/sync/feishu/record-changed` 的 smoke 可以直接继续，不需要重建表或手工补列。
+重放迁移后，旧表会自动补上 `base_token`、`table_id`、`view_id`、`field_mapping_json`、`mode`、`records_unchanged` 和 `duration_ms`，并把 `sync_jobs_status_check` / `sync_jobs_trigger_type_check` / `sync_jobs_mode_check` 升级到当前集合。这样同步接口的 smoke 可以直接继续，不需要重建表或手工补列。
 
-补充说明：这个 smoke 返回 `202 Accepted` 只说明 receiver、enqueue 和数据库写入这条链路是通的；在本地环境里，async worker 之后仍可能因为真实 Base 应用凭据或 source 配置不完整而触发 Feishu OpenAPI `400`，这是另一个独立的后续失败点。
+补充说明：这个 smoke 返回 `202 Accepted` 只说明 receiver、enqueue 和数据库写入这条链路是通的；在本地环境里，async worker 之后仍可能因为真实 Base 应用凭据或 source 配置不完整而触发 Feishu OpenAPI `400`，这是另一个独立的后续失败点。同步接口不接收 `tenantKey`，原始镜像层统一使用项目常量 tenant，并把 `source_id` 规范化为 `baseToken:tableId`。
 
 ## 快速检查
 
