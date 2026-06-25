@@ -16,20 +16,20 @@ describe('createFacilityAnalysisBaseExporterFactory', () => {
     await exporter.export(minimalSavedResult());
 
     expect(runtime.addTable).toHaveBeenCalledTimes(3);
-    expect(runtime.addTable).toHaveBeenCalledWith('设施分析批次', expect.arrayContaining([
-      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm:ss' } }),
+    expect(runtime.addTable).toHaveBeenCalledWith('设施和政策变动汇总', expect.arrayContaining([
+      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } }),
       expect.objectContaining({ name: '数据采集日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
       expect.objectContaining({ name: '对比日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
       expect.objectContaining({ name: '当前酒店数', type: 'number', style: expect.objectContaining({ precision: 0 }) }),
       expect.objectContaining({ name: '变动明细', type: 'text' }),
     ]));
     expect(runtime.addTable).toHaveBeenCalledWith('设施酒店变动明细', expect.arrayContaining([
-      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm:ss' } }),
+      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } }),
       expect.objectContaining({ name: '数据采集日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
       expect.objectContaining({ name: '对比日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
     ]));
     expect(runtime.addTable).toHaveBeenCalledWith('设施变动项明细', expect.arrayContaining([
-      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm:ss' } }),
+      expect.objectContaining({ name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } }),
       expect.objectContaining({ name: '数据采集日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
       expect.objectContaining({ name: '对比日期', type: 'datetime', style: { format: 'yyyy/MM/dd' } }),
     ]));
@@ -67,7 +67,7 @@ describe('createFacilityAnalysisBaseExporterFactory', () => {
     const store = createStore();
     const runtime = createRuntime({
       tables: [
-        { tableId: 'tbl-batch', tableName: '设施分析批次' },
+        { tableId: 'tbl-batch', tableName: '设施和政策变动汇总' },
         { tableId: 'tbl-hotel', tableName: '设施酒店变动明细' },
         { tableId: 'tbl-change', tableName: '设施变动项明细' },
       ],
@@ -87,6 +87,25 @@ describe('createFacilityAnalysisBaseExporterFactory', () => {
 
     expect(runtime.addTable).not.toHaveBeenCalled();
     expect(runtime.addField).toHaveBeenCalled();
+  });
+
+  it('omits empty datetime fields instead of writing empty strings', async () => {
+    const store = createStore();
+    const runtime = createRuntime({ tables: [], fields: {} });
+    const exporter = createFacilityAnalysisBaseExporterFactory({
+      env: { LARK_BASE_AUTH_CODE: 'auth-code-a' },
+      store,
+      createRuntime: () => runtime as unknown as LarkOpenApiRuntime,
+    });
+    const result = minimalSavedResult();
+    result.result.hotelDiffs[0].previousCollectedAt = undefined;
+
+    await exporter.export(result);
+
+    const writtenFields = runtime.addRecords.mock.calls.flatMap((call) =>
+      (call[1] as Array<{ fields: Record<string, unknown> }>).map((record) => record.fields),
+    );
+    expect(writtenFields.every((fields) => fields.对比日期 !== '')).toBe(true);
   });
 
   it('marks failed when export throws', async () => {

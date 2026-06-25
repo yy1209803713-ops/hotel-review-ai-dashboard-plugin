@@ -107,7 +107,7 @@ describe('createFacilityAnalysisRunner', () => {
       viewId: 'view-facility',
     });
 
-    expect(baseRuntime.addTable).toHaveBeenCalledWith('设施分析批次', expect.any(Array));
+    expect(baseRuntime.addTable).toHaveBeenCalledWith('设施和政策变动汇总', expect.any(Array));
     expect(baseRuntime.addTable).toHaveBeenCalledWith('设施酒店变动明细', expect.any(Array));
     expect(baseRuntime.addTable).toHaveBeenCalledWith('设施变动项明细', expect.any(Array));
     expect(baseRuntime.addRecords).toHaveBeenCalled();

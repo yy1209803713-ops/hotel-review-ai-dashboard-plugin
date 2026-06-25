@@ -10,7 +10,7 @@ export type FacilityAnalysisBaseExporterFactoryOptions = {
   store?: FacilityAnalysisStore;
 };
 
-const BATCH_TABLE_NAME = '设施分析批次';
+const BATCH_TABLE_NAME = '设施和政策变动汇总';
 const HOTEL_TABLE_NAME = '设施酒店变动明细';
 const CHANGE_TABLE_NAME = '设施变动项明细';
 
@@ -60,7 +60,9 @@ export class FacilityAnalysisBaseExporter {
         throw new BackendAnalysisError(500, 'export_summary', 'failed to create facility batch record');
       }
 
-      await runtime.addRecords(tables.hotel.tableId, hotelRows.map((fields) => ({ fields: { ...fields, '批次记录ID': batchRecordId } })));
+      if (hotelRows.length) {
+        await runtime.addRecords(tables.hotel.tableId, hotelRows.map((fields) => ({ fields: { ...fields, '批次记录ID': batchRecordId } })));
+      }
       if (changeRows.length) {
         await runtime.addRecords(tables.change.tableId, changeRows.map((fields) => ({ fields: { ...fields, '批次记录ID': batchRecordId } })));
       }
@@ -145,7 +147,7 @@ async function findExistingResultRows(runtime: LarkOpenApiRuntime, tableId: stri
 }
 
 function buildBatchRow(result: FacilityAnalysisStoredResult): Record<string, unknown> {
-  return {
+  return omitEmptyFields({
     结果ID: result.resultId,
     分析时间: dateTimeToTimestamp(result.result.generatedAt),
     数据采集日期: dateOnlyToTimestamp(result.result.collectionDate),
@@ -157,7 +159,7 @@ function buildBatchRow(result: FacilityAnalysisStoredResult): Record<string, unk
     总结: result.result.dailySummary,
     变动明细: buildBatchChangeDetail(result),
     原始JSON: JSON.stringify(result.result),
-  };
+  });
 }
 
 function getComparisonDate(result: FacilityAnalysisStoredResult): string | undefined {
@@ -190,6 +192,10 @@ function dateOnlyToTimestamp(date: string): number {
 
 function dateOnlyToTimestampOrEmpty(date: string | undefined): number | string {
   return date ? dateOnlyToTimestamp(date) : '';
+}
+
+function omitEmptyFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== ''));
 }
 
 function buildBatchChangeDetail(result: FacilityAnalysisStoredResult): string {
@@ -254,7 +260,7 @@ function valueToText(value: unknown): string {
 }
 
 function buildHotelRows(result: FacilityAnalysisStoredResult): Array<Record<string, unknown>> {
-  return result.result.hotelDiffs.map((diff) => ({
+  return result.result.hotelDiffs.map((diff) => omitEmptyFields({
     结果ID: result.resultId,
     分析时间: dateTimeToTimestamp(result.result.generatedAt),
     数据采集日期: dateOnlyToTimestamp(result.result.collectionDate),
@@ -273,7 +279,7 @@ function buildChangeRows(result: FacilityAnalysisStoredResult): Array<Record<str
   const rows: Array<Record<string, unknown>> = [];
   for (const diff of result.result.hotelDiffs) {
     for (const change of diff.changes) {
-      rows.push({
+      rows.push(omitEmptyFields({
         结果ID: result.resultId,
         分析时间: dateTimeToTimestamp(result.result.generatedAt),
         数据采集日期: dateOnlyToTimestamp(result.result.collectionDate),
@@ -286,7 +292,7 @@ function buildChangeRows(result: FacilityAnalysisStoredResult): Array<Record<str
         变动后: change.after ?? '',
         变动描述: change.description,
         原始JSON: JSON.stringify(change),
-      });
+      }));
     }
   }
   return rows;
@@ -305,7 +311,7 @@ const integerStyle = {
 
 const batchFields = [
   { name: '结果ID', type: text },
-  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm:ss' } },
+  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm' } },
   { name: '数据采集日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '对比日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '当前酒店数', type: number, style: integerStyle },
@@ -320,7 +326,7 @@ const batchFields = [
 const hotelFields = [
   { name: '批次记录ID', type: text },
   { name: '结果ID', type: text },
-  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm:ss' } },
+  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm' } },
   { name: '数据采集日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '对比日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '酒店ID', type: text },
@@ -335,7 +341,7 @@ const hotelFields = [
 const changeFields = [
   { name: '批次记录ID', type: text },
   { name: '结果ID', type: text },
-  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm:ss' } },
+  { name: '分析时间', type: datetime, style: { format: 'yyyy/MM/dd HH:mm' } },
   { name: '数据采集日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '对比日期', type: datetime, style: { format: 'yyyy/MM/dd' } },
   { name: '酒店ID', type: text },

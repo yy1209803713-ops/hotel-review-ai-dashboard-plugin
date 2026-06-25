@@ -38,6 +38,7 @@ export type LarkOpenApiRuntime = {
   addField(tableId: string, field: unknown): Promise<{ fieldId: string }>;
   addRecords(tableId: string, records: Array<{ fields: Record<string, unknown> }>): Promise<string[]>;
   setRecords(tableId: string, records: Array<{ recordId: string; fields: Record<string, unknown> }>): Promise<Array<{ recordId: string }>>;
+  deleteRecords(tableId: string, recordIds: string[]): Promise<Array<{ recordId: string }>>;
 };
 
 const FIELD_META_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -190,6 +191,13 @@ export function createLarkOpenApiRuntime(options: LarkOpenApiRuntimeOptions): La
 
       return requireArray(data.records, `records missing after updating records in ${tableId}`).map((record) => ({
         recordId: requireString(record.record_id, `record_id missing after updating record in ${tableId}`),
+      }));
+    },
+
+    async deleteRecords(tableId: string, recordIds: string[]): Promise<Array<{ recordId: string }>> {
+      const data = await api.deleteRecords(tableId, recordIds);
+      return requireArray(data.records, `records missing after deleting records in ${tableId}`).map((record) => ({
+        recordId: requireString(record.record_id, `record_id missing after deleting record in ${tableId}`),
       }));
     },
   };

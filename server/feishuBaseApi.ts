@@ -55,6 +55,10 @@ export type FeishuBaseApi = {
     tableId: string,
     records: Array<{ record_id: string; fields: Record<string, unknown> }>,
   ) => Promise<{ records?: Array<{ record_id?: string }> }>;
+  deleteRecords: (
+    tableId: string,
+    recordIds: string[],
+  ) => Promise<{ records?: Array<{ record_id?: string }> }>;
 };
 
 export function createFeishuBaseApi(options: FeishuBaseApiOptions): FeishuBaseApi {
@@ -150,6 +154,16 @@ export function createFeishuBaseApi(options: FeishuBaseApiOptions): FeishuBaseAp
         },
       );
     },
+
+    async deleteRecords(tableId, recordIds) {
+      return client.request<{ records?: Array<{ record_id?: string }> }>(
+        createPath(`/tables/${encodeURIComponent(tableId)}/records/batch_delete`),
+        {
+          method: 'POST',
+          body: JSON.stringify({ records: recordIds }),
+        },
+      );
+    },
   };
 
   function listTablesPage(params: { pageSize: number; pageToken?: unknown }) {
@@ -226,15 +240,37 @@ export function buildFieldMetaIndex<T extends FeishuBaseFieldMetaLike>(fields: T
   return index;
 }
 
-function toOpenApiField(field: unknown): { field_name: string; type: unknown } {
+function toOpenApiField(field: unknown): { field_name: string; type: unknown; property?: Record<string, unknown> } {
   if (!isRecord(field)) {
     throw new Error('Field definition must be an object');
   }
   const name = field.name ?? field.field_name;
+  const type = normalizeBitableFieldType(requirePresent(field.type, `field type missing for ${String(name)}`));
+  const property = toOpenApiFieldProperty(type, field.style);
   return {
     field_name: requireString(name, 'field name missing while creating table'),
-    type: normalizeBitableFieldType(requirePresent(field.type, `field type missing for ${String(name)}`)),
+    type,
+    ...(property ? { property } : {}),
   };
+}
+
+function toOpenApiFieldProperty(type: unknown, style: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(style)) {
+    return undefined;
+  }
+  if (type === 5 && typeof style.format === 'string') {
+    return { date_formatter: style.format };
+  }
+  if (type === 2) {
+    return Object.fromEntries(
+      Object.entries({
+        formatter: '0',
+        precision: style.precision,
+        comma_style: style.thousands_separator,
+      }).filter(([, value]) => value !== undefined),
+    );
+  }
+  return undefined;
 }
 
 function normalizeBitableFieldType(type: unknown): unknown {

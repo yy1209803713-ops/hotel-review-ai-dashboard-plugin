@@ -149,6 +149,17 @@ describe('createLarkOpenApiRuntime', () => {
           },
         });
       }
+      if (url.includes('/open-apis/bitable/v1/apps/base-a/tables/tbl-cache/records/batch_delete')) {
+        expect(init?.headers).toMatchObject({ Authorization: 'Bearer auth-code-a' });
+        seenBodies.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: {
+            records: [{ record_id: 'rec-cache-1' }],
+          },
+        });
+      }
       throw new Error(`unexpected request ${url}`);
     });
     const runtime = createLarkOpenApiRuntime({
@@ -180,6 +191,7 @@ describe('createLarkOpenApiRuntime', () => {
         },
       ]),
     ).resolves.toEqual([{ recordId: 'rec-cache-1' }]);
+    await expect(runtime.deleteRecords('tbl-cache', ['rec-cache-1'])).resolves.toEqual([{ recordId: 'rec-cache-1' }]);
 
     expect(seenBodies).toEqual([
       {
@@ -207,6 +219,9 @@ describe('createLarkOpenApiRuntime', () => {
             },
           },
         ],
+      },
+      {
+        records: ['rec-cache-1'],
       },
     ]);
   });

@@ -150,6 +150,14 @@ describe('createFeishuBaseApi', () => {
           data: { records: [{ record_id: 'rec-updated' }] },
         });
       }
+      if (url === 'https://base-api.feishu.cn/open-apis/bitable/v1/apps/base-space/tables/tbl-created/records/batch_delete') {
+        seen.push(JSON.parse(String(init?.body)));
+        return jsonResponse({
+          code: 0,
+          msg: 'success',
+          data: { records: [{ record_id: 'rec-created' }] },
+        });
+      }
       throw new Error(`unexpected request ${url}`);
     });
 
@@ -167,6 +175,7 @@ describe('createFeishuBaseApi', () => {
     await expect(
       api.updateRecords('tbl-created', [{ record_id: 'rec-created', fields: { 结果: 'Updated' } }]),
     ).resolves.toEqual({ records: [{ record_id: 'rec-updated' }] });
+    await expect(api.deleteRecords('tbl-created', ['rec-created'])).resolves.toEqual({ records: [{ record_id: 'rec-created' }] });
 
     expect(seen).toEqual([
       {
@@ -178,6 +187,32 @@ describe('createFeishuBaseApi', () => {
       { field_name: '变动明细', type: 1 },
       { records: [{ fields: { 结果: 'OK' } }] },
       { records: [{ record_id: 'rec-created', fields: { 结果: 'Updated' } }] },
+      { records: ['rec-created'] },
+    ]);
+  });
+
+  it('maps display style to bitable v1 field property on field creation', async () => {
+    const seen: unknown[] = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ code: 0, msg: 'success', data: { field: { field_id: `fld-${seen.length}` } } });
+    });
+    const api = createFeishuBaseApi({
+      baseToken: 'base-space',
+      authCode: 'auth-code-a',
+      fetchImpl,
+    });
+
+    await api.createField('tbl-created', { name: '分析时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } });
+    await api.createField('tbl-created', {
+      name: '酒店数',
+      type: 'number',
+      style: { type: 'plain', precision: 0, percentage: false, thousands_separator: false },
+    });
+
+    expect(seen).toEqual([
+      { field_name: '分析时间', type: 5, property: { date_formatter: 'yyyy/MM/dd HH:mm' } },
+      { field_name: '酒店数', type: 2, property: { formatter: '0', precision: 0, comma_style: false } },
     ]);
   });
 
