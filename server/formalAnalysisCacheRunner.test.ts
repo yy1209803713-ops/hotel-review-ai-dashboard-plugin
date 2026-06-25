@@ -422,6 +422,109 @@ describe('createFormalAnalysisCacheRunner', () => {
       位置便利: [expect.objectContaining({ recordId: 'rec-a', quote: '位置很好' })],
     });
   });
+
+  it('saves diagnostics only for records that still fail after single-record retry', async () => {
+    const saveEvidenceBatchDiagnostic = vi.fn(async () => undefined);
+    const analyzeBatchImpl = vi.fn(async ({ records }) => {
+      const recordIds = records.map((record) => record.recordId);
+      if (recordIds.join(',') === 'rec-good,rec-bad' || recordIds.includes('rec-bad')) {
+        const error = new Error('模型返回内容疑似被截断，不是合法 JSON') as Error & {
+          code: string;
+          details: Record<string, unknown>;
+        };
+        error.code = 'truncated_json';
+        error.details = {
+          source: 'model_content',
+          preview: '{"evidenceItems":[',
+          rawLength: 70000,
+          rawContent: '{"evidenceItems":[',
+        };
+        throw error;
+      }
+      return {
+        evidenceItems: records.map((record) => ({
+          recordId: record.recordId,
+          quote: record.recordId === 'rec-good' ? '位置很好' : '早餐很好',
+          sentiment: 'positive' as const,
+          aspectLabel: '位置',
+        })),
+      };
+    });
+    const cacheRepository = createStaticAnalysisCacheRepository({
+      readEvidenceCache: vi.fn(async ({ records }) => ({
+        tableId: 'cache-evidence',
+        hits: [],
+        misses: records,
+        diagnostics: emptyDiagnostics(),
+      })),
+      readTopicMappingCache: vi.fn(async () => ({
+        tableId: 'cache-topic',
+        hits: [],
+        misses: [],
+        diagnostics: emptyTopicDiagnostics(),
+      })),
+    });
+    cacheRepository.saveEvidenceBatchDiagnostic = saveEvidenceBatchDiagnostic;
+
+    const runner = createFormalAnalysisCacheRunner({
+      env: {
+        AI_BASE_URL: 'https://api.example.com/v1',
+        AI_API_KEY: 'sk-test',
+        AI_MODEL: 'qwen-plus',
+        AI_MAX_BATCH_SIZE: '2',
+      },
+      now: () => '2026-06-25T15:00:00.000Z',
+      analyzeBatchImpl,
+      cacheRepository,
+    });
+
+    const result = await runner.run({
+      reviews: [
+        review('rec-good', '位置很好，服务热情。'),
+        review('rec-bad', '房间隔音不好。'),
+        review('rec-next', '早餐很好。'),
+      ],
+      query: {
+        tenantKey: 'tenant-a',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        fieldMapping: {},
+        filters: baseFilters({ hotelName: 'all' }),
+      },
+      jobId: 'job-retry',
+      pipelineVersion: 'backend-owned-v1',
+    });
+
+    expect(analyzeBatchImpl).toHaveBeenCalledTimes(4);
+    expect(saveEvidenceBatchDiagnostic).toHaveBeenCalledTimes(1);
+    expect(saveEvidenceBatchDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      jobId: 'job-retry',
+      model: 'qwen-plus',
+      batchIndex: 0,
+      batchNumber: 1,
+      batchCount: 2,
+      recordIds: ['rec-bad'],
+      records: [expect.objectContaining({ recordId: 'rec-bad' })],
+      errorCode: 'truncated_json',
+      errorMessage: '模型返回内容疑似被截断，不是合法 JSON',
+      rawContent: '{"evidenceItems":[',
+      rawLength: 70000,
+      preview: '{"evidenceItems":[',
+      createdAt: '2026-06-25T15:00:00.000Z',
+    }));
+    expect(cacheRepository.saveEvidenceCacheEntries).toHaveBeenCalledWith(expect.objectContaining({
+      records: [
+        expect.objectContaining({ recordId: 'rec-good' }),
+        expect.objectContaining({ recordId: 'rec-next' }),
+      ],
+    }));
+    expect(result.evidenceByTopic).toMatchObject({
+      位置: [
+        expect.objectContaining({ recordId: 'rec-good', quote: '位置很好' }),
+        expect.objectContaining({ recordId: 'rec-next', quote: '早餐很好' }),
+      ],
+    });
+  });
 });
 
 function review(recordId: string, content: string, hotelName = '昆明中维翠湖宾馆'): ReviewRecord {

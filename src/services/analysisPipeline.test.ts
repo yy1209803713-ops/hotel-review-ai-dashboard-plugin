@@ -288,36 +288,34 @@ describe('runAnalysis', () => {
     expect(result.negativeTopics[0].displayTopic).toBe('隔音问题让人满意');
   });
 
-  it('logs structured evidence batch failures with AI error details', async () => {
+  it('logs structured evidence retry failures with AI error details', async () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const batchFailureSpy = vi.fn();
 
-    await expect(
-      runAnalysis({
-        records,
-        config: { ...config, maxBatchSize: 2 },
-        filters,
-        fields,
-        onBatchFailure: batchFailureSpy,
-        analyzeBatchImpl: async ({ records }) => {
-          if (records.some((record) => record.recordId === 'rec3')) {
-            const error = new Error('模型返回内容不是合法 JSON') as Error & {
-              code: string;
-              details: Record<string, unknown>;
-            };
-            error.code = 'invalid_json';
-            error.details = {
-              source: 'model_content',
-              preview: 'not json',
-              rawLength: 8,
-              rawContent: 'not json',
-            };
-            throw error;
-          }
-          return { evidenceItems: [] };
-        },
-      }),
-    ).rejects.toThrow('第 2/2 批 AI 分析失败（1 条评论）：模型返回内容不是合法 JSON');
+    const result = await runAnalysis({
+      records,
+      config: { ...config, maxBatchSize: 2 },
+      filters,
+      fields,
+      onBatchFailure: batchFailureSpy,
+      analyzeBatchImpl: async ({ records }) => {
+        if (records.some((record) => record.recordId === 'rec3')) {
+          const error = new Error('模型返回内容不是合法 JSON') as Error & {
+            code: string;
+            details: Record<string, unknown>;
+          };
+          error.code = 'invalid_json';
+          error.details = {
+            source: 'model_content',
+            preview: 'not json',
+            rawLength: 8,
+            rawContent: 'not json',
+          };
+          throw error;
+        }
+        return { evidenceItems: [] };
+      },
+    });
 
     expect(batchFailureSpy).toHaveBeenCalledWith({
       batchIndex: 1,
@@ -349,8 +347,12 @@ describe('runAnalysis', () => {
           preview: 'not json',
           rawLength: 8,
         },
+        retryOfRecordCount: 1,
+        retryOfErrorMessage: '模型返回内容不是合法 JSON',
+        retryOfErrorCode: 'invalid_json',
       }),
     );
+    expect(result.overview.totalReviews).toBe(3);
 
     infoSpy.mockRestore();
   });
@@ -904,23 +906,113 @@ describe('runAnalysis', () => {
     }
   });
 
-  it('reports which batch failed without producing fallback analysis', async () => {
-    await expect(
-      runAnalysis({
-        records,
-        config,
-        filters,
-        fields,
-        analyzeBatchImpl: async ({ records }) => {
-          if (records.some((record) => record.recordId === 'rec3')) {
-            throw new Error('AI API 网络请求失败');
-          }
-          return {
-            evidenceItems: [],
+  it('retries a failed evidence batch as single records and keeps successful retries in the analysis', async () => {
+    const calls: string[][] = [];
+    const batchFailureSpy = vi.fn();
+
+    const result = await runAnalysis({
+      records: makeRecordsForEvidence([
+        ['rec1', '位置很好，服务热情。', 5],
+        ['rec2', '房间隔音不好。', 3],
+        ['rec3', '早餐很好吃。', 5],
+      ]),
+      config: { ...config, maxBatchSize: 2, topN: 10 },
+      filters,
+      fields,
+      onBatchFailure: batchFailureSpy,
+      analyzeBatchImpl: async ({ records }) => {
+        calls.push(records.map((record) => record.recordId));
+        if (records.map((record) => record.recordId).join(',') === 'rec1,rec2') {
+          throw new Error('模型返回内容不是合法 JSON');
+        }
+        return {
+          evidenceItems: records.map((record) =>
+            record.recordId === 'rec2'
+              ? evidence(record.recordId, '房间隔音不好', 'negative', '隔音问题')
+              : evidence(record.recordId, record.recordId === 'rec1' ? '位置很好' : '早餐很好吃', 'positive', '位置便利'),
+          ),
+        };
+      },
+      mergeTopicsImpl: async ({ candidates }) => primaryMergeResult(candidates),
+    });
+
+    expect(calls).toEqual([
+      ['rec1', 'rec2'],
+      ['rec1'],
+      ['rec2'],
+      ['rec3'],
+    ]);
+    expect(batchFailureSpy).not.toHaveBeenCalled();
+    expect(result.positiveTopics[0]).toMatchObject({ commentRecordIds: ['rec1', 'rec3'] });
+    expect(result.negativeTopics[0]).toMatchObject({
+      commentRecordIds: ['rec2'],
+    });
+  });
+
+  it('records only single-record retry failures and continues with other evidence batches', async () => {
+    const batchFailureSpy = vi.fn();
+    const cacheUsageSpy = vi.fn();
+
+    const result = await runAnalysis({
+      records: makeRecordsForEvidence([
+        ['rec1', '位置很好，服务热情。', 5],
+        ['rec2', '房间隔音不好。', 3],
+        ['rec3', '早餐很好吃。', 5],
+      ]),
+      config: { ...config, maxBatchSize: 2, topN: 10 },
+      filters,
+      fields,
+      onBatchFailure: batchFailureSpy,
+      onCacheUsage: cacheUsageSpy,
+      analyzeBatchImpl: async ({ records }) => {
+        const recordIds = records.map((record) => record.recordId);
+        if (recordIds.join(',') === 'rec1,rec2' || recordIds.includes('rec2')) {
+          const error = new Error('模型返回内容不是合法 JSON') as Error & {
+            code: string;
+            details: Record<string, unknown>;
           };
-        },
-      }),
-    ).rejects.toThrow('第 2/2 批 AI 分析失败（1 条评论）：AI API 网络请求失败');
+          error.code = 'invalid_json';
+          error.details = {
+            source: 'model_content',
+            preview: '{"evidenceItems":[',
+            rawLength: 64000,
+            rawContent: '{"evidenceItems":[',
+          };
+          throw error;
+        }
+        return {
+          evidenceItems: records.map((record) =>
+            evidence(record.recordId, record.recordId === 'rec1' ? '位置很好' : '早餐很好吃', 'positive', '位置便利'),
+          ),
+        };
+      },
+      mergeTopicsImpl: async ({ candidates }) => primaryMergeResult(candidates),
+    });
+
+    expect(batchFailureSpy).toHaveBeenCalledTimes(1);
+    expect(batchFailureSpy).toHaveBeenCalledWith({
+      batchIndex: 0,
+      batchNumber: 1,
+      batchCount: 2,
+      recordCount: 1,
+      recordIds: ['rec2'],
+      errorMessage: '模型返回内容不是合法 JSON',
+      errorCode: 'invalid_json',
+      details: {
+        source: 'model_content',
+        preview: '{"evidenceItems":[',
+        rawLength: 64000,
+        rawContent: '{"evidenceItems":[',
+      },
+    });
+    expect(result.positiveTopics.flatMap((topic) => topic.commentRecordIds)).toEqual(['rec1', 'rec3']);
+    expect(result.negativeTopics).toEqual([]);
+    expect(cacheUsageSpy).toHaveBeenCalledWith(expect.objectContaining({
+      analyzedRecords: [
+        expect.objectContaining({ recordId: 'rec1' }),
+        expect.objectContaining({ recordId: 'rec3' }),
+      ],
+    }));
   });
 
   it('runs batches concurrently up to configured concurrency', async () => {

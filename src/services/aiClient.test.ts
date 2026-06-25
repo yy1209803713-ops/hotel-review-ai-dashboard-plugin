@@ -307,8 +307,25 @@ describe('analyzeBatch', () => {
     const body = JSON.parse(init.body as string) as {
       messages: Array<{ role: string; content: string }>;
     };
+    const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')?.content ?? '{}') as {
+      limits: {
+        maxItemsPerRecord: number;
+        maxItemsTotal: number;
+      };
+      recordIds: string[];
+      records: Array<{ recordId: string }>;
+    };
     const prompt = body.messages.map((message) => message.content).join('\n');
+    expect(userPrompt.limits).toEqual({
+      maxItemsPerRecord: 4,
+      maxItemsTotal: records.length * 4,
+    });
+    expect(userPrompt.recordIds).toEqual(['rec1']);
+    expect(userPrompt.records.map((record) => record.recordId)).toEqual(userPrompt.recordIds);
     expect(prompt).toContain('每条评论最多返回 4 个 evidenceItems');
+    expect(prompt).toContain('本批总数最多返回 records.length * maxItemsPerRecord 条');
+    expect(prompt).toContain('maxItemsTotal');
+    expect(prompt).toContain('输出前逐一核对 recordIds');
     expect(prompt).toContain('同一个 quote 在同一条评论里只能返回一次');
   });
 
@@ -736,6 +753,23 @@ describe('analyzeBatch', () => {
 
     await expect(analyzeBatch({ config, records, fetchImpl })).rejects.toMatchObject({
       code: 'invalid_json',
+      details: {
+        source: 'model_content',
+        preview: rawContent,
+        rawLength: rawContent.length,
+      },
+    });
+  });
+
+  it('classifies unfinished JSON object responses as truncated model output', async () => {
+    const rawContent = '{"evidenceItems":[{"recordId":"rec1","quote":"位置很好"';
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ choices: [{ message: { content: rawContent } }] }), { status: 200 });
+    });
+
+    await expect(analyzeBatch({ config, records, fetchImpl })).rejects.toMatchObject({
+      code: 'truncated_json',
+      message: '模型返回内容疑似被截断，不是合法 JSON',
       details: {
         source: 'model_content',
         preview: rawContent,

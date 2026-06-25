@@ -17,6 +17,7 @@ export type AiClientErrorCode =
   | 'http_error'
   | 'network_error'
   | 'invalid_json'
+  | 'truncated_json'
   | 'schema_invalid';
 
 export type AiClientErrorDetails = {
@@ -554,8 +555,14 @@ function parseJsonObject(content: string): unknown {
       try {
         return JSON.parse(trimmed.slice(start, end + 1));
       } catch {
+        if (looksLikeTruncatedJson(trimmed)) {
+          throw new AiClientError('truncated_json', '模型返回内容疑似被截断，不是合法 JSON', details);
+        }
         throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON', details);
       }
+    }
+    if (looksLikeTruncatedJson(trimmed)) {
+      throw new AiClientError('truncated_json', '模型返回内容疑似被截断，不是合法 JSON', details);
     }
     throw new AiClientError('invalid_json', '模型返回内容不是合法 JSON', details);
   }
@@ -570,11 +577,23 @@ function createRawContentDetails(source: NonNullable<AiClientErrorDetails['sourc
   };
 }
 
+function looksLikeTruncatedJson(trimmed: string): boolean {
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return false;
+  }
+  const lastCharacter = trimmed.at(-1);
+  if (lastCharacter === '}' || lastCharacter === ']') {
+    return false;
+  }
+  return true;
+}
+
 function previewRawContent(raw: string): string {
   return raw.trim().slice(0, 2000);
 }
 
 function buildBatchPrompt(records: ReviewRecord[]): string {
+  const maxItemsTotal = records.length * MAX_EVIDENCE_ITEMS_PER_RECORD;
   return JSON.stringify({
     task:
       '从这批评论中抽取可验证的原文证据片段。每条评论可以抽取多个 evidenceItems；同一条评论如果同时有好评点和负面点，必须分别抽取 positive 和 negative。必须返回严格 JSON，字段和类型必须完全符合 jsonContract。',
@@ -587,7 +606,13 @@ function buildBatchPrompt(records: ReviewRecord[]): string {
       '“不算太远”“还可以”“不算差”“还行”这类缓和表述不能仅凭“不算”判为 negative；除非同一句或上下文同时出现“太远”“不方便”“赶车需要提前规划”“难找”“绕路”“台阶”等明确风险，否则不要抽取为风险证据。',
       '不要因为评分高而忽略负面细节；不要因为评分低而忽略正面细节。',
       'sentiment 只能是 positive 或 negative，禁止返回 neutral；“不算太亮”“有点旧”“稍微慢”这类轻微不足也归为 negative。',
+      `本批总数最多返回 records.length * maxItemsPerRecord 条，也就是 maxItemsTotal=${maxItemsTotal} 条；输出前逐一核对 recordIds，禁止返回不在 recordIds 中的 recordId。`,
     ],
+    limits: {
+      maxItemsPerRecord: MAX_EVIDENCE_ITEMS_PER_RECORD,
+      maxItemsTotal,
+    },
+    recordIds: records.map((record) => record.recordId),
     jsonContract: {
       evidenceItems: [
         {

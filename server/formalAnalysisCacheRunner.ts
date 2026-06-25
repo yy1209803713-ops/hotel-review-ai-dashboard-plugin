@@ -137,13 +137,13 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
           };
         },
         onCacheUsage: async (usage) => {
-          if (!evidenceCache.misses.length || !filteredReviews.length) {
+          if (!usage.analyzedRecords.length || !filteredReviews.length) {
             return;
           }
           await cacheRepository.saveEvidenceCacheEntries({
             ...cacheIdentity,
             model: config.model,
-            records: evidenceCache.misses,
+            records: usage.analyzedRecords,
             evidenceItems: usage.newEvidenceItems,
             now,
           });

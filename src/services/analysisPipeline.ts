@@ -32,6 +32,7 @@ export type AnalysisCacheUsage = {
   cachedEvidenceCount: number;
   cachedRecordCount: number;
   analyzedRecordCount: number;
+  analyzedRecords: ReviewRecord[];
   newEvidenceItems: TopicEvidenceItem[];
 };
 
@@ -117,6 +118,18 @@ export type AnalysisBatchFailureDiagnostic = {
   details?: unknown;
 };
 
+type AnalysisBatchFailureContext = {
+  batchIndex: number;
+  batchCount: number;
+  records: ReviewRecord[];
+  cause: unknown;
+};
+
+type AnalysisBatchResult = {
+  result: BatchAiResult;
+  records: ReviewRecord[];
+};
+
 type RunAnalysisParams = {
   records: ReviewRecord[];
   config: AiConfig;
@@ -147,6 +160,7 @@ export async function runAnalysis(params: RunAnalysisParams): Promise<AnalysisRe
   const nowMs = params.nowMs ?? defaultNowMs;
   const extractionStartedAt = params.onStageTiming ? nowMs() : 0;
   let newEvidenceItems: TopicEvidenceItem[];
+  let analyzedRecords: ReviewRecord[];
 
   try {
     const batchResults = await analyzeBatches({
@@ -159,7 +173,8 @@ export async function runAnalysis(params: RunAnalysisParams): Promise<AnalysisRe
       onBatchFailure: params.onBatchFailure,
     });
 
-    newEvidenceItems = batchResults.flatMap(extractEvidenceItems);
+    newEvidenceItems = batchResults.flatMap((item) => extractEvidenceItems(item.result));
+    analyzedRecords = batchResults.flatMap((item) => item.records);
     if (params.onStageTiming) {
       params.onStageTiming({
         step: 'AI 抽取证据',
@@ -186,6 +201,7 @@ export async function runAnalysis(params: RunAnalysisParams): Promise<AnalysisRe
     params,
     mergeTopics,
     newEvidenceItems,
+    analyzedRecords,
     cachedEvidenceItems: params.cachedEvidenceItems ?? [],
     nowMs,
   });
@@ -195,15 +211,17 @@ async function finishAnalysis(input: {
   params: RunAnalysisParams;
   mergeTopics: MergeTopicsImpl;
   newEvidenceItems: TopicEvidenceItem[];
+  analyzedRecords: ReviewRecord[];
   cachedEvidenceItems: TopicEvidenceItem[];
   nowMs: () => number;
 }): Promise<AnalysisResult> {
-  const { params, mergeTopics, newEvidenceItems, cachedEvidenceItems, nowMs } = input;
+  const { params, mergeTopics, newEvidenceItems, analyzedRecords, cachedEvidenceItems, nowMs } = input;
   const recordsToAnalyze = params.cacheMissRecords ?? params.records;
   await params.onCacheUsage?.({
     cachedEvidenceCount: cachedEvidenceItems.length,
     cachedRecordCount: unique(cachedEvidenceItems.map((item) => item.recordId)).length,
-    analyzedRecordCount: recordsToAnalyze.length,
+    analyzedRecordCount: analyzedRecords.length,
+    analyzedRecords,
     newEvidenceItems,
   });
 
@@ -325,9 +343,9 @@ async function analyzeBatches(params: {
   nowMs?: () => number;
   onBatchTiming?: (timing: AnalysisBatchTiming) => void;
   onBatchFailure?: (failure: AnalysisBatchFailureDiagnostic) => void | Promise<void>;
-}): Promise<BatchAiResult[]> {
+}): Promise<AnalysisBatchResult[]> {
   const nowMs = params.nowMs ?? defaultNowMs;
-  return runConcurrent(params.batches, params.concurrency, async (batch, index) => {
+  const batchResults = await runConcurrent(params.batches, params.concurrency, async (batch, index) => {
     const startedAt = nowMs();
     try {
       const result = await params.analyze({ config: params.config, records: batch });
@@ -338,7 +356,7 @@ async function analyzeBatches(params: {
         durationMs: roundDuration(nowMs() - startedAt),
         status: 'success',
       });
-      return result;
+      return [{ result, records: batch }];
     } catch (cause) {
       params.onBatchTiming?.({
         batchIndex: index,
@@ -347,28 +365,54 @@ async function analyzeBatches(params: {
         durationMs: roundDuration(nowMs() - startedAt),
         status: 'error',
       });
-      logEvidenceBatchFailure({
+      return retryFailedBatchAsSingleRecords({
         batchIndex: index,
         batchCount: params.batches.length,
-        recordCount: batch.length,
-        recordIds: batch.map((record) => record.recordId),
+        records: batch,
         cause,
+      }, params);
+    }
+  });
+  return batchResults.flat();
+}
+
+async function retryFailedBatchAsSingleRecords(
+  context: AnalysisBatchFailureContext,
+  params: {
+    config: AiConfig;
+    analyze: AnalyzeBatchImpl;
+    onBatchFailure?: (failure: AnalysisBatchFailureDiagnostic) => void | Promise<void>;
+  },
+): Promise<AnalysisBatchResult[]> {
+  const results: AnalysisBatchResult[] = [];
+  for (const record of context.records) {
+    try {
+      const result = await params.analyze({ config: params.config, records: [record] });
+      results.push({ result, records: [record] });
+    } catch (cause) {
+      logEvidenceBatchFailure({
+        batchIndex: context.batchIndex,
+        batchCount: context.batchCount,
+        recordCount: 1,
+        recordIds: [record.recordId],
+        cause,
+        retryOfRecordCount: context.records.length,
+        retryOfErrorMessage: formatBatchError(context.cause),
+        retryOfErrorCode: readErrorCode(context.cause),
       });
       await params.onBatchFailure?.({
-        batchIndex: index,
-        batchNumber: index + 1,
-        batchCount: params.batches.length,
-        recordCount: batch.length,
-        recordIds: batch.map((record) => record.recordId),
+        batchIndex: context.batchIndex,
+        batchNumber: context.batchIndex + 1,
+        batchCount: context.batchCount,
+        recordCount: 1,
+        recordIds: [record.recordId],
         errorMessage: formatBatchError(cause),
         errorCode: readErrorCode(cause),
         details: readErrorDetails(cause),
       });
-      throw new Error(
-        `第 ${index + 1}/${params.batches.length} 批 AI 分析失败（${batch.length} 条评论）：${formatBatchError(cause)}`,
-      );
     }
-  });
+  }
+  return results;
 }
 
 function logEvidenceBatchFailure(params: {
@@ -377,6 +421,9 @@ function logEvidenceBatchFailure(params: {
   recordCount: number;
   recordIds: string[];
   cause: unknown;
+  retryOfRecordCount?: number;
+  retryOfErrorMessage?: string;
+  retryOfErrorCode?: string;
 }): void {
   console.info('__HOTEL_REVIEW_AI_EVIDENCE_BATCH_FAILED__', JSON.stringify({
     batchIndex: params.batchIndex,
@@ -387,6 +434,9 @@ function logEvidenceBatchFailure(params: {
     errorMessage: formatBatchError(params.cause),
     errorCode: readErrorCode(params.cause),
     details: sanitizeErrorDetailsForLog(readErrorDetails(params.cause)),
+    retryOfRecordCount: params.retryOfRecordCount,
+    retryOfErrorMessage: params.retryOfErrorMessage,
+    retryOfErrorCode: params.retryOfErrorCode,
   }));
 }
 
