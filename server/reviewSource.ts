@@ -164,7 +164,6 @@ function toReviewRecord(
   const contentHash = sha256(
     canonicalJson({
       recordId: record.recordId,
-      fields: record.fields,
       mappedFields,
       content,
     }),

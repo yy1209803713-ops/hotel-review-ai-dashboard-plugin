@@ -126,6 +126,58 @@ describe('FeishuBaseReviewSource', () => {
     expect(secondVersion.recordCount).toBe(2);
   });
 
+  it('keeps content hashes stable when unmapped raw fields change', async () => {
+    const query = {
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl-review',
+      fieldMapping: {
+        content: 'fld-review',
+        score: 'fld-rating',
+        hotelName: 'fld-hotel',
+      },
+      filters: {},
+    };
+    const firstRuntime = createRuntime([
+      {
+        records: [
+          {
+            recordId: 'rec-1',
+            fields: {
+              'fld-review': 'Great view',
+              'fld-rating': 5,
+              'fld-hotel': 'Hotel A',
+              'fld-unmapped': 'before',
+            },
+          },
+        ],
+        hasMore: false,
+      },
+    ]);
+    const secondRuntime = createRuntime([
+      {
+        records: [
+          {
+            recordId: 'rec-1',
+            fields: {
+              'fld-review': 'Great view',
+              'fld-rating': 5,
+              'fld-hotel': 'Hotel A',
+              'fld-unmapped': 'after',
+            },
+          },
+        ],
+        hasMore: false,
+      },
+    ]);
+
+    const [firstReview] = await new FeishuBaseReviewSource({ runtime: firstRuntime, now: () => 1_000 }).listReviews(query);
+    const [secondReview] = await new FeishuBaseReviewSource({ runtime: secondRuntime, now: () => 1_000 }).listReviews(query);
+
+    expect(firstReview?.mappedFields).toEqual(secondReview?.mappedFields);
+    expect(firstReview?.contentHash).toBe(secondReview?.contentHash);
+  });
+
   it('fails with read_source stage when a mapped field is missing from a record', async () => {
     const runtime = createRuntime([
       {

@@ -177,11 +177,10 @@ function diffChangedReviews(existingRecords: Array<{ recordId: string; contentHa
   const existingByRecordId = new Map(existingRecords.map((record) => [record.recordId, record]));
   return reviews.filter((review) => {
     const existing = existingByRecordId.get(review.recordId);
-    return (
-      !existing ||
-      existing.contentHash !== review.contentHash ||
-      canonicalJson(existing.parsedReview) !== canonicalJson(review.mappedFields)
-    );
+    if (!existing) {
+      return true;
+    }
+    return canonicalJson(existing.parsedReview) !== canonicalJson(review.mappedFields);
   });
 }
 

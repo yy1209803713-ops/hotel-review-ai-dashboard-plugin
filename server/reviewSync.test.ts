@@ -111,6 +111,46 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     expect(latestVersion.version).not.toBe(firstVersion.version);
   });
 
+  it('does not upsert existing records when only the raw content hash algorithm changes', async () => {
+    const store = createInMemoryReviewSyncStore();
+    const feishuSource = new MutableReviewSource([review('rec-1', 'Great view', 5, 'stable-hash')]);
+    const syncService = new ReviewSyncService({
+      store,
+      sourceReaders: { feishu_base: feishuSource },
+      now: createClock([
+        '2026-06-23T08:00:00.000Z',
+        '2026-06-23T08:00:01.000Z',
+        '2026-06-23T08:00:02.000Z',
+        '2026-06-23T08:00:03.000Z',
+        '2026-06-23T08:01:00.000Z',
+        '2026-06-23T08:01:01.000Z',
+        '2026-06-23T08:01:02.000Z',
+        '2026-06-23T08:01:03.000Z',
+      ]),
+    });
+
+    await syncService.runFullSync(sourceKey);
+    feishuSource.replace([review('rec-1', 'Great view', 5, 'new-stable-hash')]);
+
+    const incrementalJob = await syncService.runIncrementalSync(sourceKey);
+
+    expect(incrementalJob).toMatchObject({
+      status: 'success',
+      mode: 'incremental',
+      recordsRead: 1,
+      recordsUpserted: 0,
+      recordsUnchanged: 1,
+    });
+    await expect(store.getReviewRecord(sourceKey, 'rec-1')).resolves.toMatchObject({
+      contentHash: 'stable-hash',
+      parsedReview: {
+        content: 'Great view',
+        rating: 5,
+        hotelName: 'Hotel A',
+      },
+    });
+  });
+
   it('enqueues full and incremental sync from HTTP receivers using global tenant and canonical source id', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({
@@ -516,7 +556,7 @@ function toQuery(key: ReviewSyncSourceKey): ReviewSourceQuery {
   };
 }
 
-function review(recordId: string, content: string, rating: number): ReviewRecord {
+function review(recordId: string, content: string, rating: number, contentHash = `${recordId}:${content}`): ReviewRecord {
   return {
     recordId,
     fields: {
@@ -530,7 +570,7 @@ function review(recordId: string, content: string, rating: number): ReviewRecord
       hotelName: 'Hotel A',
     },
     content,
-    contentHash: `${recordId}:${content}`,
+    contentHash,
   };
 }
 
