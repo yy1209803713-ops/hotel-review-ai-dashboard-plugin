@@ -230,6 +230,88 @@ describe('analyzeBatch', () => {
     expect(prompt).toContain('赶车需要提前规划');
   });
 
+  it('deduplicates repeated evidence and asks the model to limit evidence per review', async () => {
+    const repeatedQuote = '房间宽敞舒适，设备新，私汤舒适度高，酒店环境适合出游度假，餐厅味道不错';
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  evidenceItems: [
+                    ...Array.from({ length: 3 }, () => ({
+                      recordId: 'rec1',
+                      quote: repeatedQuote,
+                      sentiment: 'positive',
+                      aspectLabel: '房间舒适度',
+                    })),
+                    {
+                      recordId: 'rec1',
+                      quote: repeatedQuote,
+                      sentiment: 'positive',
+                      aspectLabel: '私汤舒适度',
+                    },
+                    {
+                      recordId: 'rec1',
+                      quote: repeatedQuote,
+                      sentiment: 'positive',
+                      aspectLabel: '度假氛围',
+                    },
+                    {
+                      recordId: 'rec1',
+                      quote: repeatedQuote,
+                      sentiment: 'positive',
+                      aspectLabel: '餐厅菜品口味',
+                    },
+                    {
+                      recordId: 'rec1',
+                      quote: repeatedQuote,
+                      sentiment: 'positive',
+                      aspectLabel: '服务态度',
+                    },
+                    {
+                      recordId: 'rec2',
+                      quote: '位置很好',
+                      sentiment: 'positive',
+                      aspectLabel: '位置便利',
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await analyzeBatch({ config, records, fetchImpl });
+
+    const evidenceItems = result.evidenceItems ?? [];
+
+    expect(evidenceItems.filter((item) => item.recordId === 'rec1')).toMatchObject([
+      {
+        recordId: 'rec1',
+        quote: repeatedQuote,
+        sentiment: 'positive',
+        aspectLabel: '房间舒适度',
+      },
+    ]);
+    expect(evidenceItems.find((item) => item.recordId === 'rec2')).toMatchObject({
+      recordId: 'rec2',
+      quote: '位置很好',
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const prompt = body.messages.map((message) => message.content).join('\n');
+    expect(prompt).toContain('每条评论最多返回 4 个 evidenceItems');
+    expect(prompt).toContain('同一个 quote 在同一条评论里只能返回一次');
+  });
+
   it('merges evidence candidates into topic groups with separate category, merge key, and display topic', async () => {
     const fetchImpl = vi.fn(async () => {
       return new Response(

@@ -264,6 +264,57 @@ COMMENT ON COLUMN topic_mapping_cache.created_at IS '创建时间。';
 COMMENT ON COLUMN topic_mapping_cache.updated_at IS '更新时间。';
 COMMENT ON COLUMN topic_mapping_cache.last_used_at IS '最近使用时间。';
 
+CREATE TABLE IF NOT EXISTS ai_batch_diagnostics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id text NOT NULL,
+  tenant_key text NOT NULL,
+  source_kind text NOT NULL,
+  source_id text NOT NULL,
+  table_id text,
+  model text NOT NULL,
+  extractor_version text NOT NULL,
+  batch_index integer NOT NULL,
+  batch_number integer NOT NULL,
+  batch_count integer NOT NULL,
+  record_ids_json jsonb NOT NULL,
+  records_json jsonb NOT NULL,
+  error_code text,
+  error_message text NOT NULL,
+  raw_content text,
+  raw_length integer,
+  preview text,
+  details_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ai_batch_diagnostics_job_idx
+  ON ai_batch_diagnostics (job_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ai_batch_diagnostics_source_idx
+  ON ai_batch_diagnostics (tenant_key, source_kind, source_id, model, created_at DESC);
+
+COMMENT ON TABLE ai_batch_diagnostics IS 'AI 批次失败诊断表，保存失败批次的输入记录、模型原始输出和错误详情。';
+COMMENT ON COLUMN ai_batch_diagnostics.id IS '诊断记录主键。';
+COMMENT ON COLUMN ai_batch_diagnostics.job_id IS '关联分析任务 ID。';
+COMMENT ON COLUMN ai_batch_diagnostics.tenant_key IS '租户标识。';
+COMMENT ON COLUMN ai_batch_diagnostics.source_kind IS '来源类型。';
+COMMENT ON COLUMN ai_batch_diagnostics.source_id IS '来源标识。';
+COMMENT ON COLUMN ai_batch_diagnostics.table_id IS '来源表 ID。';
+COMMENT ON COLUMN ai_batch_diagnostics.model IS '使用的模型标识。';
+COMMENT ON COLUMN ai_batch_diagnostics.extractor_version IS '证据抽取器版本。';
+COMMENT ON COLUMN ai_batch_diagnostics.batch_index IS '批次下标，从 0 开始。';
+COMMENT ON COLUMN ai_batch_diagnostics.batch_number IS '批次序号，从 1 开始。';
+COMMENT ON COLUMN ai_batch_diagnostics.batch_count IS '总批次数。';
+COMMENT ON COLUMN ai_batch_diagnostics.record_ids_json IS '失败批次记录 ID 列表。';
+COMMENT ON COLUMN ai_batch_diagnostics.records_json IS '失败批次输入记录快照。';
+COMMENT ON COLUMN ai_batch_diagnostics.error_code IS '错误代码。';
+COMMENT ON COLUMN ai_batch_diagnostics.error_message IS '错误信息。';
+COMMENT ON COLUMN ai_batch_diagnostics.raw_content IS '模型返回的完整原始内容。';
+COMMENT ON COLUMN ai_batch_diagnostics.raw_length IS '模型原始内容长度。';
+COMMENT ON COLUMN ai_batch_diagnostics.preview IS '模型原始内容预览。';
+COMMENT ON COLUMN ai_batch_diagnostics.details_json IS '错误详情 JSON。';
+COMMENT ON COLUMN ai_batch_diagnostics.created_at IS '诊断记录创建时间。';
+
 CREATE TABLE IF NOT EXISTS review_records (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_key text NOT NULL,

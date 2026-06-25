@@ -205,6 +205,70 @@ describeWithDatabase('createPostgresAnalysisCacheRepository', () => {
       await cleanup();
     }
   });
+
+  it('saves failed evidence batch diagnostics with raw model content and record ids', async () => {
+    const { pool: testPool, cleanup } = await createIsolatedPool();
+    pool = testPool;
+    try {
+      const repository = createPostgresAnalysisCacheRepository(pool);
+      await repository.saveEvidenceBatchDiagnostic({
+        jobId: 'job-151',
+        tenantKey: 'tenant-a',
+        sourceKind: 'feishu_base',
+        sourceId: 'base-a:tbl-review',
+        tableId: 'tbl-review',
+        model: 'qwen-plus',
+        extractorVersion: EVIDENCE_CACHE_EXTRACTOR_VERSION,
+        batchIndex: 150,
+        batchNumber: 151,
+        batchCount: 220,
+        recordIds: ['rec-a', 'rec-b'],
+        records: [review('rec-a', '位置很好'), review('rec-b', '服务很好')],
+        errorCode: 'invalid_json',
+        errorMessage: '模型返回内容不是合法 JSON',
+        rawContent: '{"evidenceItems":[{"recordId":"rec-a"}',
+        rawLength: 37,
+        preview: '{"evidenceItems"',
+        details: {
+          source: 'model_content',
+          rawLength: 37,
+        },
+        createdAt: '2026-06-24T04:00:00.000Z',
+      });
+
+      const { rows } = await pool.query<{
+        job_id: string;
+        source_id: string;
+        batch_number: number;
+        record_ids_json: string[] | string;
+        raw_content: string;
+        raw_length: number;
+        error_code: string;
+        records_json: unknown;
+      }>(
+        `select job_id, source_id, batch_number, record_ids_json, raw_content, raw_length, error_code, records_json
+        from ai_batch_diagnostics
+        where job_id = 'job-151'`,
+      );
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        job_id: 'job-151',
+        source_id: 'base-a:tbl-review',
+        batch_number: 151,
+        raw_content: '{"evidenceItems":[{"recordId":"rec-a"}',
+        raw_length: 37,
+        error_code: 'invalid_json',
+      });
+      expect(rows[0].record_ids_json).toEqual(['rec-a', 'rec-b']);
+      expect(rows[0].records_json).toMatchObject([
+        { recordId: 'rec-a', content: '位置很好' },
+        { recordId: 'rec-b', content: '服务很好' },
+      ]);
+    } finally {
+      await cleanup();
+    }
+  });
 });
 
 async function createIsolatedPool(): Promise<{ pool: Pool; cleanup: () => Promise<void> }> {

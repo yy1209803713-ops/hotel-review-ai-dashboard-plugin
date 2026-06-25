@@ -50,7 +50,7 @@ type ModelEvidenceItem = z.infer<typeof modelEvidenceItemSchema>;
 const batchAiResultSchema = z.object({
   evidenceItems: z.array(modelEvidenceItemSchema),
 }).transform((result) => ({
-  evidenceItems: result.evidenceItems.flatMap(normalizeModelEvidenceItem),
+  evidenceItems: limitEvidenceItemsByRecord(deduplicateEvidenceItems(result.evidenceItems.flatMap(normalizeModelEvidenceItem))),
 }));
 
 const topicMappingItemSchema = z.object({
@@ -125,6 +125,7 @@ type CompactTopicAssignment = z.infer<typeof compactTopicAssignmentSchema>;
 const CONNECTION_TEST_TIMEOUT_MS = 20000;
 const ANALYSIS_TIMEOUT_MS = 180000;
 const TOPIC_MERGE_PROMPT_QUOTE_LIMIT = 4;
+const MAX_EVIDENCE_ITEMS_PER_RECORD = 4;
 
 function mappingsToGroups(mappings: TopicMappingItem[], candidates: TopicMergeCandidate[]): TopicMergeResult {
   const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
@@ -565,6 +566,7 @@ function createRawContentDetails(source: NonNullable<AiClientErrorDetails['sourc
     source,
     preview: previewRawContent(raw),
     rawLength: raw.length,
+    rawContent: raw,
   };
 }
 
@@ -579,6 +581,8 @@ function buildBatchPrompt(records: ReviewRecord[]): string {
     rules: [
       'quote 必须是 content 字段里的原文连续片段，不能改写、总结或使用酒店/商家回复。',
       'aspectLabel 是这个 quote 表达的具体方面，必须比“服务/环境/卫生/设施/位置/service”这类上位类目更具体，例如“服务响应”“房间卫生”“周边位置”“停车便利”。',
+      '每条评论最多返回 4 个 evidenceItems，只保留最能代表该评论的 1-4 个原文片段；不要把同一句长 quote 拆成很多 aspectLabel。',
+      '同一个 quote 在同一条评论里只能返回一次；如果一个 quote 涉及多个方面，请选择最主要的 aspectLabel，不要重复输出。',
       '如果一条评论没有清晰观点、无明确正负倾向或没有可引用的原文片段，就不要为它生成 evidenceItem。',
       '“不算太远”“还可以”“不算差”“还行”这类缓和表述不能仅凭“不算”判为 negative；除非同一句或上下文同时出现“太远”“不方便”“赶车需要提前规划”“难找”“绕路”“台阶”等明确风险，否则不要抽取为风险证据。',
       '不要因为评分高而忽略负面细节；不要因为评分低而忽略正面细节。',
@@ -718,6 +722,49 @@ function normalizeModelEvidenceItem(item: ModelEvidenceItem): TopicEvidenceItem[
       reason,
     },
   ];
+}
+
+function deduplicateEvidenceItems(items: TopicEvidenceItem[]): TopicEvidenceItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = [
+      item.recordId,
+      normalizeEvidenceText(item.quote),
+      item.sentiment,
+      normalizeEvidenceText(item.aspectLabel),
+    ].join('|');
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function limitEvidenceItemsByRecord(items: TopicEvidenceItem[]): TopicEvidenceItem[] {
+  const countByRecordId = new Map<string, number>();
+  const quoteByRecordId = new Map<string, Set<string>>();
+  return items.filter((item) => {
+    const currentCount = countByRecordId.get(item.recordId) ?? 0;
+    if (currentCount >= MAX_EVIDENCE_ITEMS_PER_RECORD) {
+      return false;
+    }
+
+    const quoteKey = `${item.sentiment}|${normalizeEvidenceText(item.quote)}`;
+    const seenQuotes = quoteByRecordId.get(item.recordId) ?? new Set<string>();
+    if (seenQuotes.has(quoteKey)) {
+      return false;
+    }
+
+    seenQuotes.add(quoteKey);
+    quoteByRecordId.set(item.recordId, seenQuotes);
+    countByRecordId.set(item.recordId, currentCount + 1);
+    return true;
+  });
+}
+
+function normalizeEvidenceText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
 }
 
 function hasMildNegativeCue(item: { quote: string; aspectLabel: string; reason?: string }): boolean {

@@ -106,6 +106,17 @@ export type AnalysisStageTiming = {
   detail?: string;
 };
 
+export type AnalysisBatchFailureDiagnostic = {
+  batchIndex: number;
+  batchNumber: number;
+  batchCount: number;
+  recordCount: number;
+  recordIds: string[];
+  errorMessage: string;
+  errorCode?: string;
+  details?: unknown;
+};
+
 type RunAnalysisParams = {
   records: ReviewRecord[];
   config: AiConfig;
@@ -114,6 +125,7 @@ type RunAnalysisParams = {
   now?: string;
   nowMs?: () => number;
   onBatchTiming?: (timing: AnalysisBatchTiming) => void;
+  onBatchFailure?: (failure: AnalysisBatchFailureDiagnostic) => void | Promise<void>;
   onStageTiming?: (timing: AnalysisStageTiming) => void;
   cachedEvidenceItems?: TopicEvidenceItem[];
   cacheMissRecords?: ReviewRecord[];
@@ -144,6 +156,7 @@ export async function runAnalysis(params: RunAnalysisParams): Promise<AnalysisRe
       concurrency: params.config.batchConcurrency,
       nowMs,
       onBatchTiming: params.onBatchTiming,
+      onBatchFailure: params.onBatchFailure,
     });
 
     newEvidenceItems = batchResults.flatMap(extractEvidenceItems);
@@ -311,11 +324,13 @@ async function analyzeBatches(params: {
   concurrency?: number;
   nowMs?: () => number;
   onBatchTiming?: (timing: AnalysisBatchTiming) => void;
+  onBatchFailure?: (failure: AnalysisBatchFailureDiagnostic) => void | Promise<void>;
 }): Promise<BatchAiResult[]> {
   const nowMs = params.nowMs ?? defaultNowMs;
-  return runConcurrent(params.batches, params.concurrency, (batch, index) => {
+  return runConcurrent(params.batches, params.concurrency, async (batch, index) => {
     const startedAt = nowMs();
-    return params.analyze({ config: params.config, records: batch }).then((result) => {
+    try {
+      const result = await params.analyze({ config: params.config, records: batch });
       params.onBatchTiming?.({
         batchIndex: index,
         batchCount: params.batches.length,
@@ -324,7 +339,7 @@ async function analyzeBatches(params: {
         status: 'success',
       });
       return result;
-    }, (cause) => {
+    } catch (cause) {
       params.onBatchTiming?.({
         batchIndex: index,
         batchCount: params.batches.length,
@@ -336,12 +351,23 @@ async function analyzeBatches(params: {
         batchIndex: index,
         batchCount: params.batches.length,
         recordCount: batch.length,
+        recordIds: batch.map((record) => record.recordId),
         cause,
+      });
+      await params.onBatchFailure?.({
+        batchIndex: index,
+        batchNumber: index + 1,
+        batchCount: params.batches.length,
+        recordCount: batch.length,
+        recordIds: batch.map((record) => record.recordId),
+        errorMessage: formatBatchError(cause),
+        errorCode: readErrorCode(cause),
+        details: readErrorDetails(cause),
       });
       throw new Error(
         `第 ${index + 1}/${params.batches.length} 批 AI 分析失败（${batch.length} 条评论）：${formatBatchError(cause)}`,
       );
-    });
+    }
   });
 }
 
@@ -349,6 +375,7 @@ function logEvidenceBatchFailure(params: {
   batchIndex: number;
   batchCount: number;
   recordCount: number;
+  recordIds: string[];
   cause: unknown;
 }): void {
   console.info('__HOTEL_REVIEW_AI_EVIDENCE_BATCH_FAILED__', JSON.stringify({
@@ -356,9 +383,10 @@ function logEvidenceBatchFailure(params: {
     batchNumber: params.batchIndex + 1,
     batchCount: params.batchCount,
     recordCount: params.recordCount,
+    recordIds: params.recordIds,
     errorMessage: formatBatchError(params.cause),
     errorCode: readErrorCode(params.cause),
-    details: readErrorDetails(params.cause),
+    details: sanitizeErrorDetailsForLog(readErrorDetails(params.cause)),
   }));
 }
 
@@ -1027,6 +1055,14 @@ function readErrorCode(cause: unknown): string | undefined {
 
 function readErrorDetails(cause: unknown): unknown {
   return typeof cause === 'object' && cause !== null && 'details' in cause ? cause.details : undefined;
+}
+
+function sanitizeErrorDetailsForLog(details: unknown): unknown {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return details;
+  }
+  const { rawContent, ...rest } = details as Record<string, unknown>;
+  return rest;
 }
 
 function createAnalysisId(now?: string): string {

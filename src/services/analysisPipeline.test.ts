@@ -290,6 +290,7 @@ describe('runAnalysis', () => {
 
   it('logs structured evidence batch failures with AI error details', async () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const batchFailureSpy = vi.fn();
 
     await expect(
       runAnalysis({
@@ -297,6 +298,7 @@ describe('runAnalysis', () => {
         config: { ...config, maxBatchSize: 2 },
         filters,
         fields,
+        onBatchFailure: batchFailureSpy,
         analyzeBatchImpl: async ({ records }) => {
           if (records.some((record) => record.recordId === 'rec3')) {
             const error = new Error('模型返回内容不是合法 JSON') as Error & {
@@ -308,6 +310,7 @@ describe('runAnalysis', () => {
               source: 'model_content',
               preview: 'not json',
               rawLength: 8,
+              rawContent: 'not json',
             };
             throw error;
           }
@@ -316,6 +319,21 @@ describe('runAnalysis', () => {
       }),
     ).rejects.toThrow('第 2/2 批 AI 分析失败（1 条评论）：模型返回内容不是合法 JSON');
 
+    expect(batchFailureSpy).toHaveBeenCalledWith({
+      batchIndex: 1,
+      batchNumber: 2,
+      batchCount: 2,
+      recordCount: 1,
+      recordIds: ['rec3'],
+      errorMessage: '模型返回内容不是合法 JSON',
+      errorCode: 'invalid_json',
+      details: {
+        source: 'model_content',
+        preview: 'not json',
+        rawLength: 8,
+        rawContent: 'not json',
+      },
+    });
     expect(infoSpy).toHaveBeenCalledWith(
       '__HOTEL_REVIEW_AI_EVIDENCE_BATCH_FAILED__',
       JSON.stringify({
@@ -323,6 +341,7 @@ describe('runAnalysis', () => {
         batchNumber: 2,
         batchCount: 2,
         recordCount: 1,
+        recordIds: ['rec3'],
         errorMessage: '模型返回内容不是合法 JSON',
         errorCode: 'invalid_json',
         details: {

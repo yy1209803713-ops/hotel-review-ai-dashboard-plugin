@@ -69,6 +69,24 @@ export type AnalysisTopicMappingCacheReadResult = {
   diagnostics: AnalysisTopicMappingCacheDiagnostics;
 };
 
+export type EvidenceBatchDiagnosticInput = AnalysisCacheSourceIdentity & {
+  jobId: string;
+  model: string;
+  extractorVersion?: string;
+  batchIndex: number;
+  batchNumber: number;
+  batchCount: number;
+  recordIds: string[];
+  records: ReviewRecord[];
+  errorCode?: string;
+  errorMessage: string;
+  rawContent?: string;
+  rawLength?: number;
+  preview?: string;
+  details?: unknown;
+  createdAt?: string;
+};
+
 export type AnalysisCacheRepository = {
   readEvidenceCache(input: AnalysisCacheSourceIdentity & {
     model: string;
@@ -92,6 +110,7 @@ export type AnalysisCacheRepository = {
     groups: TopicMergeGroup[];
     now?: string;
   }): Promise<void>;
+  saveEvidenceBatchDiagnostic?(input: EvidenceBatchDiagnosticInput): Promise<void>;
 };
 
 export function createPostgresAnalysisCacheRepository(client: PostgresQueryClient): AnalysisCacheRepository {
@@ -332,6 +351,41 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
         );
       }
     },
+
+    async saveEvidenceBatchDiagnostic(input) {
+      await client.query(
+        `insert into ai_batch_diagnostics (
+          job_id, tenant_key, source_kind, source_id, table_id, model, extractor_version,
+          batch_index, batch_number, batch_count, record_ids_json, records_json,
+          error_code, error_message, raw_content, raw_length, preview, details_json, created_at
+        ) values (
+          $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11::jsonb, $12::jsonb,
+          $13, $14, $15, $16, $17, $18::jsonb, $19
+        )`,
+        [
+          input.jobId,
+          input.tenantKey,
+          input.sourceKind,
+          input.sourceId,
+          input.tableId ?? null,
+          input.model,
+          input.extractorVersion ?? EVIDENCE_CACHE_EXTRACTOR_VERSION,
+          input.batchIndex,
+          input.batchNumber,
+          input.batchCount,
+          JSON.stringify(input.recordIds),
+          JSON.stringify(input.records.map(diagnosticRecordSnapshot)),
+          input.errorCode ?? null,
+          input.errorMessage,
+          input.rawContent ?? null,
+          input.rawLength ?? input.rawContent?.length ?? null,
+          input.preview ?? null,
+          JSON.stringify(sanitizeDiagnosticDetails(input.details)),
+          input.createdAt ?? new Date().toISOString(),
+        ],
+      );
+    },
   };
 }
 
@@ -359,6 +413,28 @@ type TopicMappingCacheRow = {
   normalized_source_label: string;
   mapping_json: SourceTopicMapping | string;
 };
+
+function diagnosticRecordSnapshot(record: ReviewRecord): Record<string, unknown> {
+  return {
+    recordId: record.recordId,
+    reviewId: record.reviewId,
+    hotelName: record.hotelName,
+    score: record.score,
+    reviewDate: record.reviewDate,
+    checkInMonth: record.checkInMonth,
+    roomType: record.roomType,
+    hasReply: record.hasReply,
+    content: record.content,
+  };
+}
+
+function sanitizeDiagnosticDetails(details: unknown): unknown {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) {
+    return details ?? {};
+  }
+  const { rawContent, ...rest } = details as Record<string, unknown>;
+  return rest;
+}
 
 function resolveCacheSourceKind(query: ReviewSourceQuery): BackendAnalysisSourceKind {
   const configuredKind = pickNonEmptyString(query.sourceConfig?.upstreamSourceKind ?? query.sourceConfig?.sourceKind);

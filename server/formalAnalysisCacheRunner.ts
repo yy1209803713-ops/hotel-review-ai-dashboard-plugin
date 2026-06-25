@@ -8,6 +8,7 @@ import type { AnalysisRunner } from './analysisWorker';
 import type { ReviewRecord as PipelineReviewRecord } from '../src/types/analysis';
 import type { FieldMapping, FilterState } from '../src/types/config';
 import {
+  EVIDENCE_CACHE_EXTRACTOR_VERSION,
   resolveAnalysisCacheSourceIdentity,
   type AnalysisCacheRepository,
 } from './postgresAnalysisCache';
@@ -25,7 +26,7 @@ export type FormalAnalysisCacheRunnerOptions = {
 export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunnerOptions = {}): AnalysisRunner {
   const env = options.env ?? process.env;
   return {
-    async run({ reviews, query }) {
+    async run({ reviews, query, jobId }) {
       const config = readAiRuntimeConfig(env);
       const now = options.now?.() ?? new Date().toISOString();
       const cacheRepository = requireAnalysisCacheRepository(options.cacheRepository);
@@ -70,6 +71,35 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
         mergeTopicsImpl: options.mergeTopicsImpl,
         cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
         cacheMissRecords: evidenceCache.misses,
+        onBatchFailure: async (failure) => {
+          const recordsById = new Map(evidenceCache.misses.map((record) => [record.recordId, record]));
+          const failedRecords = failure.recordIds.flatMap((recordId) => {
+            const record = recordsById.get(recordId);
+            return record ? [record] : [];
+          });
+          try {
+            await cacheRepository.saveEvidenceBatchDiagnostic?.({
+              ...cacheIdentity,
+              jobId,
+              model: config.model,
+              extractorVersion: EVIDENCE_CACHE_EXTRACTOR_VERSION,
+              batchIndex: failure.batchIndex,
+              batchNumber: failure.batchNumber,
+              batchCount: failure.batchCount,
+              recordIds: failure.recordIds,
+              records: failedRecords,
+              errorCode: failure.errorCode,
+              errorMessage: failure.errorMessage,
+              rawContent: readRawContent(failure.details),
+              rawLength: readRawLength(failure.details),
+              preview: readPreview(failure.details),
+              details: failure.details,
+              createdAt: now,
+            });
+          } catch (cause) {
+            console.error('__HOTEL_REVIEW_AI_BATCH_DIAGNOSTIC_SAVE_FAILED__', cause);
+          }
+        },
         readTopicMappingsImpl: async ({ candidates }) => {
           const cache = await cacheRepository.readTopicMappingCache({
             ...cacheIdentity,
@@ -187,4 +217,16 @@ function numberOrNull(value: unknown): number | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readRawContent(details: unknown): string | undefined {
+  return isRecord(details) && typeof details.rawContent === 'string' ? details.rawContent : undefined;
+}
+
+function readPreview(details: unknown): string | undefined {
+  return isRecord(details) && typeof details.preview === 'string' ? details.preview : undefined;
+}
+
+function readRawLength(details: unknown): number | undefined {
+  return isRecord(details) && typeof details.rawLength === 'number' ? details.rawLength : undefined;
 }
