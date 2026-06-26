@@ -166,8 +166,6 @@ export default function App() {
       }
       hostDataGenerationRef.current += 1;
       setHostData(data);
-      setCurrentScopeKey(null);
-      setCurrentResultId(null);
       runtime.setRendered();
     });
     const unsubscribeConfig = runtime.onConfigChange(() => {

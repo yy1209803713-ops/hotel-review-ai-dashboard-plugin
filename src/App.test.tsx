@@ -1114,6 +1114,96 @@ describe('App initialization', () => {
     expect(runtime.setRendered).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps backend result identity after Dashboard data changes so topic evidence can still load', async () => {
+    let dataChangeHandler: ((data: unknown[][]) => void) | undefined;
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-stable-evidence',
+      summary: {
+        ...createAnalysisResult(113),
+        positiveTopics: [
+          {
+            mergeKey: '出行位置',
+            topic: '地铁就在百米内，出行特别方便',
+            displayTopic: '地铁就在百米内，出行特别方便',
+            category: '位置',
+            count: 7,
+            sentiment: 'positive' as const,
+            commentRecordIds: ['rec-location-1'],
+            evidencePhrases: ['地铁也很方便，就在周围'],
+            summary: '大量用户提及酒店距商圈和地铁很近，出行便利。',
+          },
+        ],
+      },
+    });
+    backendAnalysisClientMock.client.getTopicEvidence.mockResolvedValueOnce({
+      resultId: 'result-stable-evidence',
+      topicId: '出行位置',
+      page: 1,
+      pageSize: 10,
+      total: 1,
+      evidence: [
+        {
+          evidenceId: 'ev-location-1',
+          recordId: 'rec-location-1',
+          quote: '地铁也很方便，就在周围',
+          review: {
+            recordId: 'rec-location-1',
+            reviewId: 'review-location-1',
+            hotelName: '昆明老街五一路亚朵X酒店',
+            score: 5,
+            reviewDate: '2026-05-01 17:06:03',
+            checkInMonth: '2026-04-01 00:00:00',
+            roomType: '雅致大床房',
+            hasReply: true,
+            replyContent: '感谢认可',
+            content: '房间卫生不错，地铁也很方便，就在周围，下次还会来。',
+          },
+        },
+      ],
+    });
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: withSource({
+          tableId: 'tbl1',
+          fields: optionFieldMapping('a'),
+        }),
+      })),
+      getData: vi.fn(async () => [[{ value: 'initial', text: 'initial', groupKey: 'initial' }]]),
+      onDataChange: vi.fn((handler) => {
+        dataChangeHandler = handler;
+        return () => undefined;
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('地铁就在百米内，出行特别方便')).toBeInTheDocument());
+
+    act(() => {
+      dataChangeHandler?.([[{ value: 'changed', text: 'changed', groupKey: 'changed' }]]);
+    });
+    fireEvent.click(screen.getByText('地铁就在百米内，出行特别方便'));
+
+    await waitFor(() =>
+      expect(backendAnalysisClientMock.client.getTopicEvidence).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resultId: 'result-stable-evidence',
+          scopeKey: 'scope-initial',
+          topicId: '出行位置',
+        }),
+      ),
+    );
+    expect(await screen.findByText('昆明老街五一路亚朵X酒店')).toBeInTheDocument();
+  });
+
   it('reloads saved config after Dashboard config change events outside Create state', async () => {
     let configChangeHandler: ((config: unknown) => void) | undefined;
     const runtime = fakeRuntime({
