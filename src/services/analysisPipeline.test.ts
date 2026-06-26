@@ -8,6 +8,7 @@ import type {
   TopicMergeGroup,
   TopicMergeResult,
 } from '../types/analysis';
+import { AiClientError } from './aiClient';
 import { runAnalysis } from './analysisPipeline';
 
 const config: AiConfig = {
@@ -688,6 +689,14 @@ describe('runAnalysis', () => {
       previousErrorMessage?: string;
     }> = [];
     const savedMappings: TopicMergeGroup[][] = [];
+    const stages: Array<{
+      step: string;
+      durationMs: number;
+      status: string;
+      records?: number;
+      detail?: string;
+    }> = [];
+    const nowValues = [100, 140, 200, 260, 300, 335];
 
     const result = await runAnalysis({
       records: makeRecordsForEvidence([
@@ -698,6 +707,10 @@ describe('runAnalysis', () => {
       filters,
       fields,
       now: '2026-06-03T12:00:00+08:00',
+      nowMs: () => nowValues.shift() ?? 0,
+      onStageTiming: (stage) => {
+        stages.push(stage);
+      },
       analyzeBatchImpl: async () => ({
         evidenceItems: [
           evidence('rec1', '服务热情', 'positive', '服务态度'),
@@ -762,6 +775,71 @@ describe('runAnalysis', () => {
       '服务热情，沟通顺畅',
       '位置方便，出行省心',
     ].sort());
+    expect(stages[1]).toMatchObject({
+      step: 'AI 合并主题',
+      status: 'success',
+      records: 2,
+      detail: '候选主题 2 个；主题映射批次 1 个；重试 1 次；实际 AI 调用 2 次；合并主题 2 个',
+    });
+  });
+
+  it('retries topic mapping schema errors once with the validation error before saving mappings', async () => {
+    const mergeCalls: Array<{
+      candidates: TopicMergeCandidate[];
+      previousErrorMessage?: string;
+    }> = [];
+    const savedMappings: TopicMergeGroup[][] = [];
+
+    const result = await runAnalysis({
+      records: makeRecordsForEvidence([
+        ['rec1', '服务热情。', 5],
+      ]),
+      config: { ...config, maxBatchSize: 10, topN: 10 },
+      filters,
+      fields,
+      now: '2026-06-03T12:00:00+08:00',
+      analyzeBatchImpl: async () => ({
+        evidenceItems: [
+          evidence('rec1', '服务热情', 'positive', '服务态度'),
+        ],
+      }),
+      onTopicMappingUsage: (usage) => {
+        savedMappings.push(usage.newGroups);
+      },
+      mergeTopicsImpl: async ({ candidates, previousErrorMessage }) => {
+        mergeCalls.push({ candidates, previousErrorMessage });
+        if (!previousErrorMessage) {
+          throw new AiClientError('schema_invalid', '模型返回 JSON 不符合结构要求：缺少字段 mappings.0.summary');
+        }
+        return {
+          groups: [
+            {
+              mergeKey: '服务态度',
+              sentiment: 'positive',
+              category: '服务',
+              displayTopic: '服务热情，沟通顺畅',
+              summary: '客人认可服务态度。',
+              members: [
+                {
+                  candidateId: candidates[0].id,
+                  sourceLabel: candidates[0].sourceLabel,
+                  acceptedQuotes: candidates[0].quotes,
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+
+    expect(mergeCalls).toHaveLength(2);
+    expect(mergeCalls[0].previousErrorMessage).toBeUndefined();
+    expect(mergeCalls[1].previousErrorMessage).toBe('模型返回 JSON 不符合结构要求：缺少字段 mappings.0.summary');
+    expect(savedMappings).toHaveLength(1);
+    expect(result.positiveTopics[0]).toMatchObject({
+      displayTopic: '服务热情，沟通顺畅',
+      summary: '客人认可服务态度。',
+    });
   });
 
   it('rejects duplicate candidate coverage even when one member uses candidateId and another uses sourceLabel', async () => {
@@ -1230,7 +1308,7 @@ describe('runAnalysis', () => {
         durationMs: 25,
         status: 'success',
         records: 2,
-        detail: '候选主题 2 个；AI 调用 2 次；合并主题 2 个',
+        detail: '候选主题 2 个；主题映射批次 2 个；重试 0 次；实际 AI 调用 2 次；合并主题 2 个',
       },
       {
         step: '本地汇总主题',

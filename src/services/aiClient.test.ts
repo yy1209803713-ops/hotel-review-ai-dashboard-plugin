@@ -623,6 +623,26 @@ describe('analyzeBatch', () => {
     expect(prompt.rules.join('\n')).toContain('mappings.length 必须等于 candidateIds.length');
     expect(prompt.rules.join('\n')).not.toContain('优先输出 topicGroups + assignments');
     expect(prompt.previousErrorMessage).toBe('好评主题合并结果无效：AI 主题归并漏掉候选标签：positive|服务态度');
+    expect(prompt.requiredMappingFields).toEqual([
+      'candidateId',
+      'sourceLabel',
+      'sentiment',
+      'mergeKey',
+      'category',
+      'displayTopic',
+      'summary',
+    ]);
+    expect(prompt.rules.join('\n')).toContain('每条 mapping 必须完整包含 candidateId、sourceLabel、sentiment、mergeKey、category、displayTopic、summary');
+    expect(prompt.rules.join('\n')).toContain('candidateId、sourceLabel、sentiment、mergeKey、category、displayTopic、summary 都必须是非空字符串');
+    expect(prompt.fieldExamples[0]).toEqual({
+      candidateId: 'c001',
+      sourceLabel: '服务态度',
+      sentiment: 'positive',
+      category: '服务',
+      mergeKey: '服务态度',
+      displayTopic: '服务热情，沟通顺畅',
+      summary: '客人提到服务热情、沟通顺畅，认可工作人员响应和态度。',
+    });
     expect(prompt.jsonContract).toEqual({
       mappings: [
         {

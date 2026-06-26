@@ -653,6 +653,8 @@ function buildTopicMergePrompt(
       'displayTopic 绝对不能写成“服务/环境/卫生/设施/位置/餐饮/房型/交通/其他/service”这类上位类目，也不能照抄 category；要根据证据归纳，正向、负向和改进建议都要自然具体。',
       'displayTopic 不要使用四字成语、四字口号或生硬标签；优先写成 6-14 个中文字左右的自然短句。',
       'mappings.length 必须等于 candidateIds.length；输出前逐一核对 candidateIds，确认每个 candidateId 都在 mappings 中出现一次。',
+      '每条 mapping 必须完整包含 candidateId、sourceLabel、sentiment、mergeKey、category、displayTopic、summary；除 acceptedQuotes 和 action 外不要省略任何字段。',
+      'candidateId、sourceLabel、sentiment、mergeKey、category、displayTopic、summary 都必须是非空字符串。',
       '每个输入 candidate 的 id 必须且只能出现在一条 mapping 里，不能漏掉、不能重复、不能返回输入里不存在的 id。',
       '每条 mapping 的 sourceLabel 必须等于对应 candidate.sourceLabel，sentiment 必须等于对应 candidate.sentiment。',
       'positive candidate 必须生成 positive mapping，negative candidate 必须生成 negative mapping，绝不能串组。',
@@ -664,21 +666,42 @@ function buildTopicMergePrompt(
     retryInstruction: previousErrorMessage
       ? '上一次输出没有通过程序校验。本次必须逐一核对 candidateIds，重新输出完整 mappings，不要省略、不要重复、不要返回输入之外的 candidate。'
       : undefined,
+    requiredMappingFields: [
+      'candidateId',
+      'sourceLabel',
+      'sentiment',
+      'mergeKey',
+      'category',
+      'displayTopic',
+      'summary',
+    ],
     fieldExamples: [
       {
+        candidateId: 'c001',
+        sourceLabel: '服务态度',
+        sentiment: 'positive',
         category: '服务',
         mergeKey: '服务态度',
         displayTopic: '服务热情，沟通顺畅',
+        summary: '客人提到服务热情、沟通顺畅，认可工作人员响应和态度。',
       },
       {
+        candidateId: 'c002',
+        sourceLabel: '房间卫生',
+        sentiment: 'positive',
         category: '卫生',
         mergeKey: '房间卫生',
         displayTopic: '卫生做得很好，打扫得很及时',
+        summary: '客人提到房间干净、打扫及时，认可客房卫生维护。',
       },
       {
+        candidateId: 'c003',
+        sourceLabel: '周边位置',
+        sentiment: 'positive',
         category: '位置',
         mergeKey: '出行位置',
         displayTopic: '地理位置好，出行方便',
+        summary: '客人提到位置好、靠近出行目的地，认可周边交通和游玩便利性。',
       },
     ],
     wordingExamples: {

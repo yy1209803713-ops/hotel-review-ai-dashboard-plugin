@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { BackendAnalysisError } from './backendAnalysis';
 import { WarmupJobWorker, createWarmupService } from './warmupJob';
 import { createInMemoryWarmupJobStore } from './warmupJobStore';
 import { GLOBAL_REVIEW_SOURCE_TENANT_KEY } from './reviewSync';
@@ -205,6 +206,65 @@ describe('WarmupService and WarmupJobWorker', () => {
       stage: 'read_reviews',
       errorStage: 'read_reviews',
       errorMessage: 'source version not found for missing-base:missing-table; run sync first',
+    });
+  });
+
+  it('records merge topic failures with the merge_topics stage instead of extract_evidence', async () => {
+    const store = createInMemoryWarmupJobStore();
+    const service = createWarmupService({
+      store,
+      now: () => '2026-06-25T09:00:00.000Z',
+    });
+    const job = await service.createWarmupJob({
+      request: {
+        mode: 'incremental',
+        source: 'manual',
+        baseToken: 'base-token-a',
+        tableId: 'tbl-review',
+        fieldMapping: { content: 'fld-content', reviewDate: 'fld-review-date' },
+        startDate: '2026-06-01',
+        endDate: '2026-06-30',
+      },
+      triggerType: 'manual_api',
+    });
+    const runner: AnalysisRunner = {
+      run: vi.fn(async () => {
+        throw new BackendAnalysisError(
+          500,
+          'merge_topics',
+          '模型返回 JSON 不符合结构要求：缺少字段 mappings.0.summary',
+        );
+      }),
+    };
+    const worker = new WarmupJobWorker({
+      store,
+      reviewSource: new FakeReviewSource([review('rec-in-range', '位置很好。', '2026-06-15 10:00:00')]),
+      runner,
+      now: createClock([
+        '2026-06-25T09:00:01.000Z',
+        '2026-06-25T09:00:02.000Z',
+      ]),
+    });
+
+    const result = await worker.runWarmupJob(job.jobId);
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      summary: {
+        recordsScanned: 1,
+      },
+      errors: [
+        {
+          stage: 'merge_topics',
+          message: '模型返回 JSON 不符合结构要求：缺少字段 mappings.0.summary',
+        },
+      ],
+    });
+    await expect(store.getWarmupJob(job.jobId)).resolves.toMatchObject({
+      status: 'failed',
+      stage: 'merge_topics',
+      errorStage: 'merge_topics',
+      errorMessage: '模型返回 JSON 不符合结构要求：缺少字段 mappings.0.summary',
     });
   });
 });

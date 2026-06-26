@@ -273,6 +273,9 @@ async function runStage<T>(stage: WarmupStage, operation: () => Promise<T>): Pro
   try {
     return await operation();
   } catch (cause) {
+    if (cause instanceof BackendAnalysisError && isWarmupStage(cause.stage)) {
+      throw cause;
+    }
     throw new WarmupStageError(stage, errorMessage(cause));
   }
 }
@@ -294,10 +297,30 @@ function toWarmupError(cause: unknown): WarmupResponse['errors'][number] {
       message: cause.message,
     };
   }
+  if (cause instanceof BackendAnalysisError && isWarmupStage(cause.stage)) {
+    return {
+      stage: cause.stage,
+      message: cause.message,
+    };
+  }
   return {
     stage: 'extract_evidence',
     message: errorMessage(cause),
   };
+}
+
+function isWarmupStage(stage: string): stage is WarmupStage {
+  return [
+    'validate_request',
+    'lock',
+    'read_reviews',
+    'read_evidence_cache',
+    'extract_evidence',
+    'save_evidence_cache',
+    'read_topic_mapping_cache',
+    'merge_topics',
+    'save_topic_mapping_cache',
+  ].includes(stage);
 }
 
 function requireNonEmptyString(value: unknown, message: string): string {

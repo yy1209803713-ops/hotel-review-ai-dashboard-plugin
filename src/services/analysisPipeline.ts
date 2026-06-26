@@ -66,6 +66,8 @@ export type ReadTopicMappingsImpl = (params: {
 
 type TopicMergeStats = {
   candidateCount: number;
+  mergeBatchCount: number;
+  retryCount: number;
   mergeCallCount: number;
   groupCount: number;
 };
@@ -79,6 +81,13 @@ class InvalidTopicMergeCoverageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'InvalidTopicMergeCoverageError';
+  }
+}
+
+export class TopicMergeStageError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = 'TopicMergeStageError';
   }
 }
 
@@ -247,6 +256,8 @@ async function finishAnalysis(input: {
           result: { groups: [] },
           stats: {
             candidateCount: 0,
+            mergeBatchCount: 0,
+            retryCount: 0,
             mergeCallCount: 0,
             groupCount: 0,
           },
@@ -258,7 +269,8 @@ async function finishAnalysis(input: {
         status: 'success',
         records: validatedEvidence.length,
         detail:
-          `候选主题 ${mergeOutput.stats.candidateCount} 个；AI 调用 ${mergeOutput.stats.mergeCallCount} 次；` +
+          `候选主题 ${mergeOutput.stats.candidateCount} 个；主题映射批次 ${mergeOutput.stats.mergeBatchCount} 个；` +
+          `重试 ${mergeOutput.stats.retryCount} 次；实际 AI 调用 ${mergeOutput.stats.mergeCallCount} 次；` +
           `合并主题 ${mergeOutput.stats.groupCount} 个`,
       });
     }
@@ -541,17 +553,21 @@ async function mergeCandidateTopicsBySentiment(params: {
   const groups: TopicMergeGroup[] = [...cachedGroups];
   const newGroups: TopicMergeGroup[] = [];
   const mergeInputs = splitCandidatesBySentiment(missedCandidates);
+  let retryCount = 0;
+  let mergeCallCount = 0;
 
   if (mergeInputs.length) {
     const mergedGroups = await Promise.all(mergeInputs.map(async (candidates) => {
-      const result = await mergeTopicsWithCoverageRetry({
+      const mergeOutput = await mergeTopicsWithCoverageRetry({
         config: params.config,
         candidates,
         topN: params.topN,
         mergeTopics: params.mergeTopics,
         context: describeTopicMergeContext(candidates),
       });
-      return hydrateAcceptedQuotes(candidates, result.groups);
+      retryCount += mergeOutput.retryCount;
+      mergeCallCount += mergeOutput.callCount;
+      return hydrateAcceptedQuotes(candidates, mergeOutput.result.groups);
     }));
 
     for (const hydratedGroups of mergedGroups) {
@@ -571,7 +587,9 @@ async function mergeCandidateTopicsBySentiment(params: {
     result: { groups },
     stats: {
       candidateCount: params.candidates.length,
-      mergeCallCount: mergeInputs.length,
+      mergeBatchCount: mergeInputs.length,
+      retryCount,
+      mergeCallCount,
       groupCount: groups.length,
     },
   };
@@ -583,28 +601,71 @@ async function mergeTopicsWithCoverageRetry(params: {
   topN: number;
   mergeTopics: MergeTopicsImpl;
   context: string;
-}): Promise<TopicMergeResult> {
-  const firstResult = await params.mergeTopics({
-    config: params.config,
-    candidates: params.candidates,
-    topN: params.topN,
-  });
+}): Promise<{
+  result: TopicMergeResult;
+  callCount: number;
+  retryCount: number;
+}> {
+  let firstResult: TopicMergeResult;
   try {
-    ensureMergeResultCoversCandidates(params.candidates, firstResult.groups, params.context);
-    return firstResult;
-  } catch (cause) {
-    if (!(cause instanceof InvalidTopicMergeCoverageError)) {
-      throw cause;
-    }
-    const retryResult = await params.mergeTopics({
+    firstResult = await params.mergeTopics({
       config: params.config,
       candidates: params.candidates,
       topN: params.topN,
-      previousErrorMessage: cause.message,
     });
-    ensureMergeResultCoversCandidates(params.candidates, retryResult.groups, params.context);
-    return retryResult;
+  } catch (cause) {
+    if (!shouldRetryTopicMergeError(cause)) {
+      throw new TopicMergeStageError(formatBatchError(cause), cause);
+    }
+    try {
+      const retryResult = await params.mergeTopics({
+        config: params.config,
+        candidates: params.candidates,
+        topN: params.topN,
+        previousErrorMessage: formatBatchError(cause),
+      });
+      ensureMergeResultCoversCandidates(params.candidates, retryResult.groups, params.context);
+      return {
+        result: retryResult,
+        callCount: 2,
+        retryCount: 1,
+      };
+    } catch (retryCause) {
+      throw new TopicMergeStageError(formatBatchError(retryCause), retryCause);
+    }
   }
+  try {
+    ensureMergeResultCoversCandidates(params.candidates, firstResult.groups, params.context);
+    return {
+      result: firstResult,
+      callCount: 1,
+      retryCount: 0,
+    };
+  } catch (cause) {
+    if (!(cause instanceof InvalidTopicMergeCoverageError)) {
+      throw new TopicMergeStageError(formatBatchError(cause), cause);
+    }
+    try {
+      const retryResult = await params.mergeTopics({
+        config: params.config,
+        candidates: params.candidates,
+        topN: params.topN,
+        previousErrorMessage: cause.message,
+      });
+      ensureMergeResultCoversCandidates(params.candidates, retryResult.groups, params.context);
+      return {
+        result: retryResult,
+        callCount: 2,
+        retryCount: 1,
+      };
+    } catch (retryCause) {
+      throw new TopicMergeStageError(formatBatchError(retryCause), retryCause);
+    }
+  }
+}
+
+function shouldRetryTopicMergeError(cause: unknown): boolean {
+  return readErrorCode(cause) === 'schema_invalid';
 }
 
 function splitCandidatesBySentiment(candidates: TopicMergeCandidate[]): TopicMergeCandidate[][] {

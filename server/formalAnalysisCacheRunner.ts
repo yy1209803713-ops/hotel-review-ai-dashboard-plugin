@@ -3,7 +3,7 @@ import { BackendAnalysisError, type JsonValue } from './backendAnalysis';
 import { buildEvidenceByTopic, readAiRuntimeConfig, type AiRuntimeEnv } from './aiAnalysisRunner';
 import { DEFAULT_CONFIG } from '../src/constants/defaults';
 import { filterReviews } from '../src/services/filtering';
-import { runAnalysis, type AnalyzeBatchImpl, type MergeTopicsImpl } from '../src/services/analysisPipeline';
+import { runAnalysis, TopicMergeStageError, type AnalyzeBatchImpl, type MergeTopicsImpl } from '../src/services/analysisPipeline';
 import type { AnalysisRunner } from './analysisWorker';
 import type { ReviewRecord as PipelineReviewRecord } from '../src/types/analysis';
 import type { FieldMapping, FilterState } from '../src/types/config';
@@ -85,87 +85,95 @@ export function createFormalAnalysisCacheRunner(options: FormalAnalysisCacheRunn
       );
       let topicMappingCacheUsage: TopicMappingCacheUsageAggregate | undefined;
       const cacheWriteDiagnostics = emptyCacheWriteDiagnostics();
-      const result = await runAnalysis({
-        records: pipelineRecords,
-        config,
-        filters,
-        fields: readFieldMapping(query.fieldMapping),
-        now,
-        analyzeBatchImpl: options.analyzeBatchImpl,
-        mergeTopicsImpl: options.mergeTopicsImpl,
-        cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
-        cacheMissRecords: evidenceCache.misses,
-        onBatchFailure: async (failure) => {
-          const recordsById = new Map(evidenceCache.misses.map((record) => [record.recordId, record]));
-          const failedRecords = failure.recordIds.flatMap((recordId) => {
-            const record = recordsById.get(recordId);
-            return record ? [record] : [];
-          });
-          try {
-            await cacheRepository.saveEvidenceBatchDiagnostic?.({
-              ...cacheIdentity,
-              jobId,
-              model: config.model,
-              extractorVersion: EVIDENCE_CACHE_EXTRACTOR_VERSION,
-              batchIndex: failure.batchIndex,
-              batchNumber: failure.batchNumber,
-              batchCount: failure.batchCount,
-              recordIds: failure.recordIds,
-              records: failedRecords,
-              errorCode: failure.errorCode,
-              errorMessage: failure.errorMessage,
-              rawContent: readRawContent(failure.details),
-              rawLength: readRawLength(failure.details),
-              preview: readPreview(failure.details),
-              details: failure.details,
-              createdAt: now,
+      let result;
+      try {
+        result = await runAnalysis({
+          records: pipelineRecords,
+          config,
+          filters,
+          fields: readFieldMapping(query.fieldMapping),
+          now,
+          analyzeBatchImpl: options.analyzeBatchImpl,
+          mergeTopicsImpl: options.mergeTopicsImpl,
+          cachedEvidenceItems: evidenceCache.hits.flatMap((hit) => hit.evidenceItems),
+          cacheMissRecords: evidenceCache.misses,
+          onBatchFailure: async (failure) => {
+            const recordsById = new Map(evidenceCache.misses.map((record) => [record.recordId, record]));
+            const failedRecords = failure.recordIds.flatMap((recordId) => {
+              const record = recordsById.get(recordId);
+              return record ? [record] : [];
             });
-          } catch (cause) {
-            console.error('__HOTEL_REVIEW_AI_BATCH_DIAGNOSTIC_SAVE_FAILED__', cause);
-          }
-        },
-        readTopicMappingsImpl: async ({ candidates }) => {
-          const cache = await cacheRepository.readTopicMappingCache({
-            ...cacheIdentity,
-            model: config.model,
-            candidates,
-            now,
-          });
-          topicMappingCacheUsage = mergeTopicMappingCacheUsage(topicMappingCacheUsage, cache);
-          return {
-            cachedMappings: cache.hits.map((hit) => hit.mapping),
-            cachedCandidates: cache.hits.map((hit) => hit.candidate),
-          };
-        },
-        onCacheUsage: async (usage) => {
-          if (!usage.analyzedRecords.length || !filteredReviews.length) {
-            return;
-          }
-          const writeResult = await cacheRepository.saveEvidenceCacheEntries({
-            ...cacheIdentity,
-            model: config.model,
-            records: usage.analyzedRecords,
-            evidenceItems: usage.newEvidenceItems,
-            now,
-          });
-          cacheWriteDiagnostics.evidenceCache.inserts += writeResult.inserts;
-          cacheWriteDiagnostics.evidenceCache.updates += writeResult.updates;
-        },
-        onTopicMappingUsage: async (usage) => {
-          if (!usage.newCandidates.length || !usage.newGroups.length) {
-            return;
-          }
-          const writeResult = await cacheRepository.saveTopicMappingCacheEntries({
-            ...cacheIdentity,
-            model: config.model,
-            candidates: usage.newCandidates,
-            groups: usage.newGroups,
-            now,
-          });
-          cacheWriteDiagnostics.topicMappingCache.inserts += writeResult.inserts;
-          cacheWriteDiagnostics.topicMappingCache.updates += writeResult.updates;
-        },
-      });
+            try {
+              await cacheRepository.saveEvidenceBatchDiagnostic?.({
+                ...cacheIdentity,
+                jobId,
+                model: config.model,
+                extractorVersion: EVIDENCE_CACHE_EXTRACTOR_VERSION,
+                batchIndex: failure.batchIndex,
+                batchNumber: failure.batchNumber,
+                batchCount: failure.batchCount,
+                recordIds: failure.recordIds,
+                records: failedRecords,
+                errorCode: failure.errorCode,
+                errorMessage: failure.errorMessage,
+                rawContent: readRawContent(failure.details),
+                rawLength: readRawLength(failure.details),
+                preview: readPreview(failure.details),
+                details: failure.details,
+                createdAt: now,
+              });
+            } catch (cause) {
+              console.error('__HOTEL_REVIEW_AI_BATCH_DIAGNOSTIC_SAVE_FAILED__', cause);
+            }
+          },
+          readTopicMappingsImpl: async ({ candidates }) => {
+            const cache = await cacheRepository.readTopicMappingCache({
+              ...cacheIdentity,
+              model: config.model,
+              candidates,
+              now,
+            });
+            topicMappingCacheUsage = mergeTopicMappingCacheUsage(topicMappingCacheUsage, cache);
+            return {
+              cachedMappings: cache.hits.map((hit) => hit.mapping),
+              cachedCandidates: cache.hits.map((hit) => hit.candidate),
+            };
+          },
+          onCacheUsage: async (usage) => {
+            if (!usage.analyzedRecords.length || !filteredReviews.length) {
+              return;
+            }
+            const writeResult = await cacheRepository.saveEvidenceCacheEntries({
+              ...cacheIdentity,
+              model: config.model,
+              records: usage.analyzedRecords,
+              evidenceItems: usage.newEvidenceItems,
+              now,
+            });
+            cacheWriteDiagnostics.evidenceCache.inserts += writeResult.inserts;
+            cacheWriteDiagnostics.evidenceCache.updates += writeResult.updates;
+          },
+          onTopicMappingUsage: async (usage) => {
+            if (!usage.newCandidates.length || !usage.newGroups.length) {
+              return;
+            }
+            const writeResult = await cacheRepository.saveTopicMappingCacheEntries({
+              ...cacheIdentity,
+              model: config.model,
+              candidates: usage.newCandidates,
+              groups: usage.newGroups,
+              now,
+            });
+            cacheWriteDiagnostics.topicMappingCache.inserts += writeResult.inserts;
+            cacheWriteDiagnostics.topicMappingCache.updates += writeResult.updates;
+          },
+        });
+      } catch (cause) {
+        if (cause instanceof TopicMergeStageError) {
+          throw new BackendAnalysisError(500, 'merge_topics', cause.message);
+        }
+        throw cause;
+      }
       const cacheDiagnostics = buildFormalCacheDiagnostics(evidenceCache, topicMappingCacheUsage);
       const summaryWithDiagnostics = {
         ...(result as unknown as Record<string, unknown>),
