@@ -112,6 +112,95 @@ describe('createFacilityAnalysisRunner', () => {
     expect(baseRuntime.addTable).toHaveBeenCalledWith('设施变动项明细', expect.any(Array));
     expect(baseRuntime.addRecords).toHaveBeenCalled();
   });
+
+  it('reanalyzes each collection date in the requested range after clearing previous exports', async () => {
+    const store = createMemoryFacilityAnalysisStore();
+    const runtime = createRuntime([
+      {
+        records: [
+          baseRecord('old-a', '2026-06-24 12:00:00', 'A', 'A酒店', '58'),
+          baseRecord('current-a-25', '2026-06-25 12:00:00', 'A', 'A酒店', '68'),
+          baseRecord('current-b-26', '2026-06-26 12:00:00', 'B', 'B酒店', '88'),
+        ],
+        hasMore: false,
+      },
+    ]);
+    const baseExporter = {
+      export: vi.fn(),
+      clearDateRange: vi.fn(),
+    };
+    const runner = createFacilityAnalysisRunner({
+      store,
+      createRuntime: () => runtime,
+      summarizeChanges: async ({ collectionDate, hotelDiffs }) => ({
+        dailySummary: `本次分析${collectionDate}共${hotelDiffs.length}家酒店。`,
+        hotelSummaries: Object.fromEntries(hotelDiffs.map((diff) => [diff.hotelId, diff.hotelName])),
+      }),
+      baseExporter,
+      now: () => '2026-06-26T12:05:00.000+08:00',
+    });
+
+    const saved = await runner.run({
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl-facility',
+      viewId: 'view-facility',
+      reanalyze: true,
+      reanalyzeDateRange: {
+        startDate: '2026-06-25',
+        endDate: '2026-06-26',
+      },
+    });
+
+    expect(baseExporter.clearDateRange).toHaveBeenCalledWith({
+      baseToken: 'base-token-a',
+      startDate: '2026-06-25',
+      endDate: '2026-06-26',
+    });
+    expect(store.saved.map((item) => item.result.collectionDate)).toEqual(['2026-06-25', '2026-06-26']);
+    expect(baseExporter.export).toHaveBeenCalledTimes(2);
+    expect(saved.result.collectionDate).toBe('2026-06-26');
+  });
+
+  it('does not clear previous exports when the reanalysis range has a missing collection date', async () => {
+    const store = createMemoryFacilityAnalysisStore();
+    const runtime = createRuntime([
+      {
+        records: [
+          baseRecord('current-a-25', '2026-06-25 12:00:00', 'A', 'A酒店', '68'),
+        ],
+        hasMore: false,
+      },
+    ]);
+    const baseExporter = {
+      export: vi.fn(),
+      clearDateRange: vi.fn(),
+    };
+    const runner = createFacilityAnalysisRunner({
+      store,
+      createRuntime: () => runtime,
+      summarizeChanges: async ({ collectionDate, hotelDiffs }) => ({
+        dailySummary: `本次分析${collectionDate}共${hotelDiffs.length}家酒店。`,
+        hotelSummaries: Object.fromEntries(hotelDiffs.map((diff) => [diff.hotelId, diff.hotelName])),
+      }),
+      baseExporter,
+      now: () => '2026-06-26T12:05:00.000+08:00',
+    });
+
+    await expect(runner.run({
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl-facility',
+      reanalyze: true,
+      reanalyzeDateRange: {
+        startDate: '2026-06-25',
+        endDate: '2026-06-26',
+      },
+    })).rejects.toThrow('no facility records found for collection date 2026-06-26');
+
+    expect(baseExporter.clearDateRange).not.toHaveBeenCalled();
+    expect(store.saved).toHaveLength(0);
+  });
 });
 
 function createMemoryFacilityAnalysisStore(): FacilityAnalysisStore & { saved: Array<Parameters<FacilityAnalysisStore['saveResult']>[0]> } {

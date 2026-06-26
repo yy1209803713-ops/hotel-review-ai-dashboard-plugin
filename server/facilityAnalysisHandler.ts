@@ -13,6 +13,11 @@ type FacilityAnalyzeRequest = {
   tableId?: string;
   viewId?: string;
   fieldMapping?: Partial<FacilityFieldMapping>;
+  reanalyze?: boolean;
+  reanalyzeDateRange?: {
+    startDate?: string;
+    endDate?: string;
+  };
 };
 
 const API_PATH = '/api/hotel-review-ai/facilities/analyze';
@@ -43,6 +48,15 @@ export async function handleFacilityAnalysisRequest(
       tableId: body.tableId,
       viewId: body.viewId,
       fieldMapping: body.fieldMapping,
+      ...(body.reanalyze === true
+        ? {
+            reanalyze: true,
+            reanalyzeDateRange: {
+              startDate: body.reanalyzeDateRange.startDate,
+              endDate: body.reanalyzeDateRange.endDate,
+            },
+          }
+        : {}),
     });
     return jsonResponse({
       resultId: saved.resultId,
@@ -78,10 +92,36 @@ function validateBody(body: FacilityAnalyzeRequest): asserts body is Required<Pi
   if (missing.length) {
     throw new BackendAnalysisError(400, 'validate_request', `missing required fields: ${missing.join(', ')}`);
   }
+  if (body.reanalyze !== undefined && typeof body.reanalyze !== 'boolean') {
+    throw new BackendAnalysisError(400, 'validate_request', 'reanalyze must be a boolean');
+  }
+  if (body.reanalyze === true) {
+    validateReanalysisDateRange(body.reanalyzeDateRange);
+  }
 }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validateReanalysisDateRange(
+  value: FacilityAnalyzeRequest['reanalyzeDateRange'],
+): asserts value is { startDate: string; endDate: string } {
+  if (!value || !isValidDateOnly(value.startDate) || !isValidDateOnly(value.endDate)) {
+    throw new BackendAnalysisError(400, 'validate_request', 'reanalyzeDateRange.startDate and reanalyzeDateRange.endDate must be YYYY-MM-DD');
+  }
+  if (value.startDate > value.endDate) {
+    throw new BackendAnalysisError(400, 'validate_request', 'reanalyzeDateRange.startDate must be on or before reanalyzeDateRange.endDate');
+  }
+}
+
+function isValidDateOnly(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function jsonResponse(body: unknown, status: number): Response {

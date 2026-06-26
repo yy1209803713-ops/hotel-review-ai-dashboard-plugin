@@ -126,6 +126,57 @@ describe('createFacilityAnalysisBaseExporterFactory', () => {
       error: 'boom',
     }));
   });
+
+  it('deletes existing rows in all export tables for the requested collection date range', async () => {
+    const store = createStore();
+    const runtime = createRuntime({
+      tables: [
+        { tableId: 'tbl-batch', tableName: '设施和政策变动汇总' },
+        { tableId: 'tbl-hotel', tableName: '设施酒店变动明细' },
+        { tableId: 'tbl-change', tableName: '设施变动项明细' },
+      ],
+      fields: {
+        'tbl-batch': [{ fieldId: 'fld-date', fieldName: '数据采集日期', fieldType: 'datetime' }],
+        'tbl-hotel': [{ fieldId: 'fld-date', fieldName: '数据采集日期', fieldType: 'datetime' }],
+        'tbl-change': [{ fieldId: 'fld-date', fieldName: '数据采集日期', fieldType: 'datetime' }],
+      },
+      records: {
+        'tbl-batch': [
+          exportRecord('batch-24', '2026-06-24'),
+          exportRecord('batch-25', '2026-06-25'),
+          exportRecord('batch-26', '2026-06-26'),
+          exportRecord('batch-27', '2026-06-27'),
+        ],
+        'tbl-hotel': [
+          exportRecord('hotel-25', '2026-06-25'),
+          exportRecord('hotel-26', '2026-06-26'),
+        ],
+        'tbl-change': [
+          exportRecord('change-25', '2026-06-25'),
+        ],
+      },
+    });
+    const exporter = createFacilityAnalysisBaseExporterFactory({
+      env: { LARK_BASE_AUTH_CODE: 'auth-code-a' },
+      store,
+      createRuntime: () => runtime as unknown as LarkOpenApiRuntime,
+    });
+
+    const deleted = await exporter.clearDateRange({
+      baseToken: 'base-token-a',
+      startDate: '2026-06-25',
+      endDate: '2026-06-26',
+    });
+
+    expect(deleted).toEqual({
+      batch: 2,
+      hotel: 2,
+      change: 1,
+    });
+    expect(runtime.deleteRecords).toHaveBeenCalledWith('tbl-change', ['change-25']);
+    expect(runtime.deleteRecords).toHaveBeenCalledWith('tbl-hotel', ['hotel-25', 'hotel-26']);
+    expect(runtime.deleteRecords).toHaveBeenCalledWith('tbl-batch', ['batch-25', 'batch-26']);
+  });
 });
 
 function createStore(): FacilityAnalysisStore & { markExportStatus: ReturnType<typeof vi.fn> } {
@@ -135,16 +186,30 @@ function createStore(): FacilityAnalysisStore & { markExportStatus: ReturnType<t
   } as unknown as FacilityAnalysisStore & { markExportStatus: ReturnType<typeof vi.fn> };
 }
 
-function createRuntime(input: { tables: Array<{ tableId: string; tableName: string }>; fields: Record<string, Array<{ fieldId: string; fieldName: string; fieldType: string | number }>> }) {
+function createRuntime(input: {
+  tables: Array<{ tableId: string; tableName: string }>;
+  fields: Record<string, Array<{ fieldId: string; fieldName: string; fieldType: string | number }>>;
+  records?: Record<string, Array<{ recordId: string; fields: Record<string, unknown> }>>;
+}) {
   return {
     getTableList: vi.fn(async () => input.tables),
     getFieldMetaList: vi.fn(async (tableId: string) => input.fields[tableId] ?? []),
     clearFieldMetaCache: vi.fn(),
-    readRecordsPage: vi.fn(async () => ({ records: [], hasMore: false })),
+    readRecordsPage: vi.fn(async (tableId: string) => ({ records: input.records?.[tableId] ?? [], hasMore: false })),
     addTable: vi.fn(async (_name: string) => ({ tableId: `tbl-${Math.random().toString(16).slice(2, 8)}` })),
     addField: vi.fn(async (_tableId: string) => ({ fieldId: `fld-${Math.random().toString(16).slice(2, 8)}` })),
     addRecords: vi.fn(async (_tableId: string, records: Array<{ fields: Record<string, unknown> }>) => records.map((_, index) => `rec-${index + 1}`)),
     setRecords: vi.fn(),
+    deleteRecords: vi.fn(async (_tableId: string, recordIds: string[]) => recordIds.map((recordId) => ({ recordId }))),
+  };
+}
+
+function exportRecord(recordId: string, collectionDate: string): { recordId: string; fields: Record<string, unknown> } {
+  return {
+    recordId,
+    fields: {
+      数据采集日期: Date.parse(`${collectionDate}T00:00:00+08:00`),
+    },
   };
 }
 

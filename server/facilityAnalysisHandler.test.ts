@@ -45,6 +45,88 @@ describe('handleFacilityAnalysisRequest', () => {
     });
   });
 
+  it('passes explicit reanalysis date range to the runner', async () => {
+    const result = minimalResult();
+    const run = vi.fn(async () => ({
+      resultId: 'facility-result-1',
+      result,
+    }));
+
+    const response = await handleFacilityAnalysisRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/facilities/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer facility-secret',
+        },
+        body: JSON.stringify({
+          tenantKey: 'tenant-a',
+          baseToken: 'base-token-a',
+          tableId: 'tbl4E0oXrtLaqVD1',
+          viewId: 'vew4lxWDMf',
+          reanalyze: true,
+          reanalyzeDateRange: {
+            startDate: '2026-06-25',
+            endDate: '2026-06-26',
+          },
+        }),
+      }),
+      {
+        secret: 'facility-secret',
+        runner: { run },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(run).toHaveBeenCalledWith({
+      tenantKey: 'tenant-a',
+      baseToken: 'base-token-a',
+      tableId: 'tbl4E0oXrtLaqVD1',
+      viewId: 'vew4lxWDMf',
+      fieldMapping: undefined,
+      reanalyze: true,
+      reanalyzeDateRange: {
+        startDate: '2026-06-25',
+        endDate: '2026-06-26',
+      },
+    });
+  });
+
+  it('rejects reanalysis requests without a valid date range', async () => {
+    const runner = { run: vi.fn() };
+
+    const response = await handleFacilityAnalysisRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/facilities/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer facility-secret',
+        },
+        body: JSON.stringify({
+          tenantKey: 'tenant-a',
+          baseToken: 'base-token-a',
+          tableId: 'tbl4E0oXrtLaqVD1',
+          reanalyze: true,
+          reanalyzeDateRange: {
+            startDate: '2026-06-26',
+            endDate: '2026-06-25',
+          },
+        }),
+      }),
+      {
+        secret: 'facility-secret',
+        runner,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      stage: 'validate_request',
+      message: 'reanalyzeDateRange.startDate must be on or before reanalyzeDateRange.endDate',
+    });
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
   it('rejects missing authorization and required table fields', async () => {
     const runner = { run: vi.fn() };
 

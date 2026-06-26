@@ -11,6 +11,8 @@
 - JSON 会先做 canonicalize，忽略对象 key 顺序和数组顺序；单纯顺序变化不会被判定为变动。
 - 代码先计算结构化 diff，AI 只负责把确定差异写成可读摘要。
 - 分析结果保存到 Postgres `facility_analysis_runs.result_json`。
+- `reanalyze` 不传或为 `false` 时保持正常逻辑；显式传 `true` 时，会按 `reanalyzeDateRange` 的采集日期范围逐日重分析。
+- 重分析会先删除三张 Feishu Base 导出表里对应 `数据采集日期` 的旧记录，再重新生成并导出：`设施和政策变动汇总`、`设施酒店变动明细`、`设施变动项明细`。
 
 ## 后端接口
 
@@ -28,6 +30,22 @@ Content-Type: application/json
   "baseToken": "DCXnbnOk0afmeFsJ0Gpcd17anK4",
   "tableId": "tbl4E0oXrtLaqVD1",
   "viewId": "vew4lxWDMf"
+}
+```
+
+重分析请求体：
+
+```json
+{
+  "tenantKey": "default",
+  "baseToken": "DCXnbnOk0afmeFsJ0Gpcd17anK4",
+  "tableId": "tbl4E0oXrtLaqVD1",
+  "viewId": "vew4lxWDMf",
+  "reanalyze": true,
+  "reanalyzeDateRange": {
+    "startDate": "2026-06-25",
+    "endDate": "2026-06-26"
+  }
 }
 ```
 

@@ -10,6 +10,21 @@ export type FacilityAnalysisBaseExporterFactoryOptions = {
   store?: FacilityAnalysisStore;
 };
 
+export type FacilityAnalysisDateRangeClearResult = {
+  batch: number;
+  hotel: number;
+  change: number;
+};
+
+export type FacilityAnalysisBaseExporterPort = {
+  export(result: FacilityAnalysisStoredResult): Promise<void>;
+  clearDateRange?(input: {
+    baseToken: string;
+    startDate: string;
+    endDate: string;
+  }): Promise<FacilityAnalysisDateRangeClearResult>;
+};
+
 const BATCH_TABLE_NAME = '设施和政策变动汇总';
 const HOTEL_TABLE_NAME = '设施酒店变动明细';
 const CHANGE_TABLE_NAME = '设施变动项明细';
@@ -32,7 +47,7 @@ export function createFacilityAnalysisBaseExporterFactory(options: FacilityAnaly
   return new FacilityAnalysisBaseExporter(options.env ?? process.env, options.createRuntime ?? createLarkOpenApiRuntime, options.store);
 }
 
-export class FacilityAnalysisBaseExporter {
+export class FacilityAnalysisBaseExporter implements FacilityAnalysisBaseExporterPort {
   constructor(
     private readonly env: FeishuBaseRuntimeEnv,
     private readonly createRuntime: typeof createLarkOpenApiRuntime,
@@ -78,6 +93,22 @@ export class FacilityAnalysisBaseExporter {
     }
   }
 
+  async clearDateRange(input: {
+    baseToken: string;
+    startDate: string;
+    endDate: string;
+  }): Promise<FacilityAnalysisDateRangeClearResult> {
+    validateDateRange(input.startDate, input.endDate);
+    const runtime = this.getRuntime(input.baseToken);
+    const tables = await ensureTables(runtime);
+    const [change, hotel, batch] = await Promise.all([
+      deleteRowsByCollectionDateRange(runtime, tables.change.tableId, input.startDate, input.endDate),
+      deleteRowsByCollectionDateRange(runtime, tables.hotel.tableId, input.startDate, input.endDate),
+      deleteRowsByCollectionDateRange(runtime, tables.batch.tableId, input.startDate, input.endDate),
+    ]);
+    return { batch, hotel, change };
+  }
+
   private getRuntime(baseToken: string): LarkOpenApiRuntime {
     const authCode = requireFeishuBaseAuthCode(this.env, 'export_summary', 'facility analysis export');
     return this.createRuntime({ baseToken, authCode });
@@ -100,6 +131,98 @@ export class FacilityAnalysisBaseExporter {
       exportedAt: status === 'success' ? new Date().toISOString() : undefined,
     });
   }
+}
+
+async function deleteRowsByCollectionDateRange(
+  runtime: LarkOpenApiRuntime,
+  tableId: string,
+  startDate: string,
+  endDate: string,
+): Promise<number> {
+  const recordIds: string[] = [];
+  let pageToken: unknown = undefined;
+  do {
+    const page = await runtime.readRecordsPage(tableId, { pageSize: 500, pageToken });
+    recordIds.push(
+      ...page.records
+        .filter((record) => {
+          const collectionDate = readCollectionDate(record.fields);
+          return collectionDate !== undefined && collectionDate >= startDate && collectionDate <= endDate;
+        })
+        .map((record) => record.recordId),
+    );
+    pageToken = page.hasMore ? page.pageToken : undefined;
+  } while (pageToken !== undefined && pageToken !== null && pageToken !== '');
+
+  for (const chunk of chunkArray(recordIds, 200)) {
+    await runtime.deleteRecords(tableId, chunk);
+  }
+  return recordIds.length;
+}
+
+function readCollectionDate(fields: Record<string, unknown>): string | undefined {
+  return normalizeCollectionDate(fields.数据采集日期 ?? fields['数据采集日期']);
+}
+
+function normalizeCollectionDate(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return formatDateInChinaTimezone(new Date(value));
+  }
+  if (value instanceof Date) {
+    return formatDateInChinaTimezone(value);
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const dateOnly = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/);
+    if (dateOnly) {
+      return dateOnly[1];
+    }
+    const slashDate = trimmed.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    if (slashDate) {
+      return `${slashDate[1]}-${slashDate[2].padStart(2, '0')}-${slashDate[3].padStart(2, '0')}`;
+    }
+    const parsed = Date.parse(trimmed);
+    if (Number.isFinite(parsed)) {
+      return formatDateInChinaTimezone(new Date(parsed));
+    }
+  }
+  return undefined;
+}
+
+function formatDateInChinaTimezone(value: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(value);
+}
+
+function validateDateRange(startDate: string, endDate: string): void {
+  if (!isValidDateOnly(startDate) || !isValidDateOnly(endDate)) {
+    throw new BackendAnalysisError(400, 'reanalyze', 'reanalyze date range must use YYYY-MM-DD');
+  }
+  if (startDate > endDate) {
+    throw new BackendAnalysisError(400, 'reanalyze', 'reanalyze startDate must be on or before endDate');
+  }
+}
+
+function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function ensureTables(runtime: LarkOpenApiRuntime): Promise<ExportTables> {
