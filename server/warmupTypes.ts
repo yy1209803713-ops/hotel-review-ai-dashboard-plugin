@@ -2,6 +2,8 @@ export type WarmupMode = 'bootstrap' | 'incremental';
 
 export type WarmupSource = 'dashboard-button' | 'feishu-workflow' | 'manual';
 
+export type WarmupDateRangeShortcut = 'today';
+
 export type WarmupStage =
   | 'validate_request'
   | 'lock'
@@ -20,6 +22,7 @@ export type WarmupRequest = {
   tableId: string;
   viewId?: string;
   fieldMapping?: Record<string, string>;
+  dateRange?: WarmupDateRangeShortcut;
   startDate?: string;
   endDate?: string;
   configId?: string;

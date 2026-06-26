@@ -355,6 +355,49 @@ describe('ReviewSyncService and PostgresReviewSource', () => {
     ]);
   });
 
+  it('expands sync follow-up warmup today range before enqueueing warmup', async () => {
+    const syncService = new ReviewSyncService({
+      store: createInMemoryReviewSyncStore(),
+      sourceReaders: { feishu_base: new MutableReviewSource([review('rec-1', 'Great view', 5)]) },
+      now: createClock(['2026-06-25T16:30:00.000Z']),
+    });
+    const enqueuedWarmups: unknown[] = [];
+
+    const response = await handleReviewSyncRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental', {
+        method: 'POST',
+        body: JSON.stringify({
+          baseToken: 'base-token-a',
+          tableId: 'tbl-review',
+          fieldMapping: sourceKey.fieldMapping,
+          warmup: {
+            enabled: true,
+            mode: 'incremental',
+            dateRange: 'today',
+          },
+        }),
+      }),
+      {
+        service: syncService,
+        onWarmupRequested: (request) => enqueuedWarmups.push(request),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(enqueuedWarmups).toEqual([
+      {
+        syncJobId: 'sync-job-1',
+        sourceKey,
+        warmup: {
+          enabled: true,
+          mode: 'incremental',
+          startDate: '2026-06-26 00:00:00',
+          endDate: '2026-06-26 23:59:59',
+        },
+      },
+    ]);
+  });
+
   it('removes Feishu record-changed HTTP receiver so events no longer enqueue sync jobs', async () => {
     const store = createInMemoryReviewSyncStore();
     const syncService = new ReviewSyncService({

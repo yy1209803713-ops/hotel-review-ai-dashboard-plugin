@@ -5,7 +5,8 @@ import {
   type ReviewSyncService,
   type ReviewSyncSourceKey,
 } from './reviewSync';
-import type { WarmupMode } from './warmupTypes';
+import type { WarmupDateRangeShortcut, WarmupMode } from './warmupTypes';
+import { isWarmupDateRangeShortcut, normalizeWarmupDateRange } from './warmupDateRange';
 
 export type ReviewSyncHandlerOptions = {
   service: ReviewSyncService;
@@ -25,6 +26,7 @@ type SyncSourceRequestBody = {
   warmup?: {
     enabled?: boolean;
     mode?: WarmupMode;
+    dateRange?: WarmupDateRangeShortcut;
     startDate?: string;
     endDate?: string;
   };
@@ -58,14 +60,18 @@ export async function handleReviewSyncRequest(request: Request, options: ReviewS
       const mode = url.pathname.endsWith('/full') ? 'full' : 'incremental';
       const job = await options.service.enqueueSyncJob(sourceKey, mode);
       if (body.warmup?.enabled === true) {
+        if (!isWarmupDateRangeShortcut(body.warmup.dateRange)) {
+          throw new BackendAnalysisError(400, 'validate_request', 'warmup.dateRange must be today when provided');
+        }
+        const normalizedWarmup = normalizeWarmupDateRange(body.warmup, job.createdAt);
         options.onWarmupRequested?.({
           syncJobId: job.jobId,
           sourceKey,
           warmup: {
             enabled: true,
-            mode: isWarmupMode(body.warmup.mode) ? body.warmup.mode : 'incremental',
-            startDate: body.warmup.startDate?.trim() || undefined,
-            endDate: body.warmup.endDate?.trim() || undefined,
+            mode: isWarmupMode(normalizedWarmup.mode) ? normalizedWarmup.mode : 'incremental',
+            startDate: normalizedWarmup.startDate,
+            endDate: normalizedWarmup.endDate,
           },
         });
       }

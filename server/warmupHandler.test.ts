@@ -149,6 +149,59 @@ describe('handleWarmupRequest', () => {
     });
   });
 
+  it('expands today dateRange to the current Asia/Shanghai review day', async () => {
+    const service = createWarmupService({
+      store: createInMemoryWarmupJobStore(),
+      now: () => '2026-06-25T16:30:00.000Z',
+    });
+    const enqueue = vi.fn();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const response = await handleWarmupRequest(
+      new Request('http://127.0.0.1:8787/api/hotel-review-ai/warmup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer local-warmup-secret',
+        },
+        body: JSON.stringify({
+          mode: 'incremental',
+          source: 'feishu-workflow',
+          baseToken: 'base-a',
+          tableId: 'tbl-review',
+          fieldMapping: {
+            content: 'fld-content',
+            reviewDate: 'fld-review-date',
+          },
+          dateRange: 'today',
+        }),
+      }),
+      {
+        warmupSecret: 'local-warmup-secret',
+        now: () => '2026-06-25T16:30:00.000Z',
+        service,
+        onWarmupJobCreated: enqueue,
+      },
+    );
+
+    expect(response.status).toBe(202);
+    expect(enqueue).toHaveBeenCalledWith('warmup-job-1');
+    expect(infoSpy).toHaveBeenCalledWith(
+      '__HOTEL_REVIEW_AI_WARMUP_TRIGGER__',
+      JSON.stringify({
+        jobId: 'warmup-job-1',
+        source: 'feishu-workflow',
+        mode: 'incremental',
+        baseToken: 'base-a',
+        tableId: 'tbl-review',
+        viewId: undefined,
+        startDate: '2026-06-26 00:00:00',
+        endDate: '2026-06-26 23:59:59',
+        dryRun: false,
+      }),
+    );
+  });
+
   it('returns not found for other paths', async () => {
     const response = await handleWarmupRequest(
       new Request('http://127.0.0.1:8787/health', { method: 'GET' }),

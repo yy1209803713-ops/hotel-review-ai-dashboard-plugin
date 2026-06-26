@@ -6,6 +6,7 @@ import type { WarmupJob, WarmupJobStore, WarmupTriggerType } from './warmupJobSt
 import type { WarmupMode, WarmupRequest, WarmupResponse, WarmupStage } from './warmupTypes';
 import { DEFAULT_CONFIG } from '../src/constants/defaults';
 import { isReviewDateRangeBoundaryString } from '../src/services/filtering';
+import { isWarmupDateRangeShortcut, normalizeWarmupDateRange } from './warmupDateRange';
 
 export type WarmupServiceOptions = {
   store: WarmupJobStore;
@@ -69,12 +70,14 @@ export function createWarmupService(options: WarmupServiceOptions): WarmupServic
   const now = options.now ?? (() => new Date().toISOString());
   return {
     async createWarmupJob(input) {
-      const mode = isWarmupMode(input.request.mode) ? input.request.mode : 'incremental';
-      const validationMessage = validateWarmupRequest(input.request);
+      const createdAt = now();
+      const request = normalizeWarmupDateRange(input.request, createdAt);
+      const mode = isWarmupMode(request.mode) ? request.mode : 'incremental';
+      const validationMessage = validateWarmupRequest(request);
       if (validationMessage) {
         throw new BackendAnalysisError(400, 'validate_request', validationMessage);
       }
-      const sourceKey = buildWarmupSourceKey(input.request);
+      const sourceKey = buildWarmupSourceKey(request);
       const acceptedResponse: WarmupResponse = {
         jobId: 'pending',
         status: 'accepted',
@@ -86,9 +89,9 @@ export function createWarmupService(options: WarmupServiceOptions): WarmupServic
         sourceKey,
         mode,
         triggerType: input.triggerType,
-        request: normalizeWarmupRequest(input.request, mode),
+        request: normalizeWarmupRequest(request, mode),
         acceptedResponse,
-        createdAt: now(),
+        createdAt,
       });
     },
   };
@@ -251,6 +254,9 @@ function validateWarmupRequest(request: WarmupRequest): string {
   }
   if (!request.tableId?.trim()) {
     errors.push('tableId is required');
+  }
+  if (!isWarmupDateRangeShortcut(request.dateRange)) {
+    errors.push('dateRange must be today when provided');
   }
   if (request.startDate && !isDateString(request.startDate)) {
     errors.push('startDate must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss');

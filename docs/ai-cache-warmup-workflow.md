@@ -88,7 +88,15 @@ https://<tunnel-domain>/api/hotel-review-ai/warmup
 }
 ```
 
-`bootstrap` 用于首次初始化；`incremental` 用于日常补齐。`startDate` / `endDate` 是评论时间口径，对应评论字段 `reviewDate`；不传时扫描当前全局 read model 全部评论，再只对两层缓存 miss 调 AI。
+`bootstrap` 用于首次初始化；`incremental` 用于日常补齐。`startDate` / `endDate` 是评论时间口径，对应评论字段 `reviewDate`；不传时扫描当前全局 read model 全部评论，再只对两层缓存 miss 调 AI。定时任务可传 `dateRange: "today"`，后端会按 `Asia/Shanghai` 展开为当天 `00:00:00` 到 `23:59:59`；如果同时传了 `startDate` 或 `endDate`，显式时间优先。
+
+定时任务只扫当天时，可用下面的时间参数替代显式 `startDate` / `endDate`：
+
+```json
+{
+  "dateRange": "today"
+}
+```
 
 本地 curl：
 
@@ -171,8 +179,7 @@ curl -sS -X POST 'http://127.0.0.1:8787/api/hotel-review-ai/sync/incremental' \
     "warmup": {
       "enabled": true,
       "mode": "incremental",
-      "startDate": "2026-06-01",
-      "endDate": "2026-06-30"
+      "dateRange": "today"
     }
   }'
 ```

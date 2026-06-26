@@ -2,6 +2,7 @@ import type { WarmupMode, WarmupRequest, WarmupResponse, WarmupSource, WarmupSta
 import { BackendAnalysisError } from './backendAnalysis';
 import { createWarmupAcceptedResponse, type WarmupService } from './warmupJob';
 import { isReviewDateRangeBoundaryString } from '../src/services/filtering';
+import { isWarmupDateRangeShortcut, normalizeWarmupDateRange } from './warmupDateRange';
 
 export type WarmupHandlerOptions = {
   warmupSecret: string;
@@ -45,28 +46,29 @@ export async function handleWarmupRequest(request: Request, options: WarmupHandl
     return jsonResponse(createFailureResponse('unknown-table', 'incremental', startedAt, 'invalid JSON body'), 400);
   }
 
-  const mode = isWarmupMode(payload.mode) ? payload.mode : 'incremental';
-  const jobId = createWarmupJobId(startedAt, payload.tableId);
-  const validationMessage = validateWarmupPayload(payload);
+  const normalizedPayload = normalizeWarmupDateRange(payload, startedAt);
+  const mode = isWarmupMode(normalizedPayload.mode) ? normalizedPayload.mode : 'incremental';
+  const jobId = createWarmupJobId(startedAt, normalizedPayload.tableId);
+  const validationMessage = validateWarmupPayload(normalizedPayload);
   if (validationMessage) {
-    return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, validationMessage), 400);
+    return jsonResponse(createFailureResponse(normalizedPayload.tableId || 'unknown-table', mode, startedAt, validationMessage), 400);
   }
 
   if (!options.service) {
-    return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, 'warmup service is not configured'), 500);
+    return jsonResponse(createFailureResponse(normalizedPayload.tableId || 'unknown-table', mode, startedAt, 'warmup service is not configured'), 500);
   }
 
   try {
     const job = await options.service.createWarmupJob({
-      request: payload,
-      triggerType: triggerTypeFromSource(payload.source),
+      request: normalizedPayload,
+      triggerType: triggerTypeFromSource(normalizedPayload.source),
     });
     options.onWarmupJobCreated?.(job.jobId);
-    logWarmupTrigger(payload, job.jobId, mode);
+    logWarmupTrigger(normalizedPayload, job.jobId, mode);
     return jsonResponse(createWarmupAcceptedResponse(job), 202);
   } catch (cause) {
     if (cause instanceof BackendAnalysisError) {
-      return jsonResponse(createFailureResponse(payload.tableId || 'unknown-table', mode, startedAt, cause.message, cause.stage as WarmupStage), cause.status);
+      return jsonResponse(createFailureResponse(normalizedPayload.tableId || 'unknown-table', mode, startedAt, cause.message, cause.stage as WarmupStage), cause.status);
     }
     throw cause;
   }
@@ -93,6 +95,9 @@ function validateWarmupPayload(payload: WarmupRequest): string {
   }
   if (!payload.baseToken?.trim()) {
     errors.push('baseToken is required');
+  }
+  if (!isWarmupDateRangeShortcut(payload.dateRange)) {
+    errors.push('dateRange must be today when provided');
   }
   if (payload.startDate && !isDateString(payload.startDate)) {
     errors.push('startDate must be YYYY-MM-DD or YYYY-MM-DD HH:mm:ss');
