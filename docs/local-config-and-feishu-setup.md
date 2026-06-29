@@ -63,3 +63,5 @@ npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 如果要让飞书工作流打到本地后端，后端地址不能用 `127.0.0.1`，需要换成公网可访问地址或 tunnel。
+
+这次妙搭部署里的完整经验和正确外部 curl 也整理在 [docs/feishu-miaoda-deployment-notes.md](./feishu-miaoda-deployment-notes.md)。

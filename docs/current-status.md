@@ -1,5 +1,9 @@
 # 酒店评论 AI 仪表盘插件当前状态
 
+## 2026-06-29 飞书妙搭部署记录
+
+这次部署的经验和踩坑已经整理到 [docs/feishu-miaoda-deployment-notes.md](./feishu-miaoda-deployment-notes.md)，后面查部署、curl、鉴权、数据库状态直接看那份。
+
 ## 2026-06-24 后端拥有的 Postgres analysis store / read model 验证
 
 本次任务按 `docs/superpowers/plans/2026-06-23-backend-owned-analysis-postgres-persistence.md` 的 B 路径推进：后端数据库成为 `analysis_configs`、`analysis_jobs`、`analysis_results`、topic evidence、`review_records`、`review_source_versions` 和 `sync_jobs` 的事实源。
