@@ -820,6 +820,68 @@ describe('App initialization', () => {
     });
   });
 
+  it('keeps the loading panel visible when saveConfig emits config change during analysis update', async () => {
+    const savedConfig = {
+      ...withSource({
+        tableId: 'tbl1',
+        fields: optionFieldMapping('a'),
+      }),
+      backend: {
+        endpointUrl: 'https://backend.example.com',
+        baseToken: 'base-token',
+        configId: 'config-1',
+      },
+    };
+    const runningJob = deferred<never>();
+    let configChangeHandler: ((config: unknown) => void) | undefined;
+    const runtime = fakeRuntime({
+      getState: () => 'View',
+      getConfig: vi.fn(async () => ({
+        dataConditions: [],
+        customConfig: savedConfig,
+      })),
+      getData: vi.fn(async () => [
+        [{ value: '评论ID', text: '评论ID', groupKey: null }],
+        [{ value: 'review-a', text: 'review-a', groupKey: 'review-a' }],
+      ]),
+      saveConfig: vi.fn(async (nextConfig) => {
+        configChangeHandler?.(nextConfig);
+        return true;
+      }),
+      onConfigChange: vi.fn((handler) => {
+        configChangeHandler = handler as (config: unknown) => void;
+        return () => undefined;
+      }),
+      readRecordsPage: vi.fn(async () => ({
+        records: [optionRecordWithReviewId('a', 'review-a', '表 A 酒店', '2026-06-01 00:00:00')],
+        hasMore: false,
+      })),
+    });
+    backendAnalysisClientMock.client.createAnalysisJob.mockResolvedValueOnce({
+      jobId: 'job-analysis-update',
+      scopeKey: 'scope-analysis-update',
+      status: 'running',
+    });
+    backendAnalysisClientMock.client.getJob.mockReturnValueOnce(runningJob.promise);
+    backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
+      resultId: 'result-analysis-update',
+      summary: createAnalysisResult(3),
+    });
+
+    runtimeRef.current = runtime;
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByText('更新分析')[0]);
+
+    await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('正在读取评论并进行 AI 聚合分析...')).toBeInTheDocument();
+    expect(runtime.getConfig).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('还没有分析缓存')).not.toBeInTheDocument();
+    expect(screen.queryByText('尚未分析')).not.toBeInTheDocument();
+  });
+
   it('renders last analysis time in Beijing local time', async () => {
     backendAnalysisClientMock.client.getLatestResult.mockResolvedValueOnce({
       resultId: 'result-beijing',

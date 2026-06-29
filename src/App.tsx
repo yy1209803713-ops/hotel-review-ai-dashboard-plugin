@@ -127,6 +127,7 @@ export default function App() {
   const configSourceRequestId = useRef(0);
   const initRequestRef = useRef(0);
   const renderedRequestRef = useRef(0);
+  const configReloadSuppressionRef = useRef(0);
   const configRef = useRef(config);
   const mountedRef = useRef(true);
 
@@ -134,6 +135,16 @@ export default function App() {
   const showCacheDiagnostics = isDemoMode();
   const isCurrentConfigSourceRequest = (requestId?: number) =>
     mountedRef.current && (requestId === undefined || configSourceRequestId.current === requestId);
+  const isConfigReloadSuppressed = () => configReloadSuppressionRef.current > 0;
+
+  async function withSuppressedConfigReloads<T>(action: () => Promise<T>): Promise<T> {
+    configReloadSuppressionRef.current += 1;
+    try {
+      return await action();
+    } finally {
+      configReloadSuppressionRef.current = Math.max(0, configReloadSuppressionRef.current - 1);
+    }
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -169,7 +180,7 @@ export default function App() {
       runtime.setRendered();
     });
     const unsubscribeConfig = runtime.onConfigChange(() => {
-      if (!mountedRef.current || state === 'Create') {
+      if (!mountedRef.current || state === 'Create' || isConfigReloadSuppressed()) {
         return;
       }
       setReloadToken((current) => current + 1);
@@ -455,69 +466,71 @@ export default function App() {
   }
 
   async function restoreBackendAnalysis(pluginConfig: PluginConfig): Promise<DisplayInitSnapshot> {
-    const backendValidationMessage = getBackendValidationMessage(pluginConfig);
-    if (backendValidationMessage) {
-      throw new BackendAnalysisError('validate_request', backendValidationMessage);
-    }
+    return withSuppressedConfigReloads(async () => {
+      const backendValidationMessage = getBackendValidationMessage(pluginConfig);
+      if (backendValidationMessage) {
+        throw new BackendAnalysisError('validate_request', backendValidationMessage);
+      }
 
-    const ownership = await getBackendOwnership(runtime);
-    const client = createBackendAnalysisClient({ endpointUrl: pluginConfig.backend.endpointUrl });
-    const upserted = await upsertBackendAnalysisConfig(client, ownership, pluginConfig);
-    const configWithBackend = withBackendConfigId(pluginConfig, upserted);
-    configRef.current = configWithBackend;
-    if (shouldPersistBackendConfigMetadata(pluginConfig, upserted)) {
-      await savePluginConfig(runtime, configWithBackend);
-    }
+      const ownership = await getBackendOwnership(runtime);
+      const client = createBackendAnalysisClient({ endpointUrl: pluginConfig.backend.endpointUrl });
+      const upserted = await upsertBackendAnalysisConfig(client, ownership, pluginConfig);
+      const configWithBackend = withBackendConfigId(pluginConfig, upserted);
+      configRef.current = configWithBackend;
+      if (shouldPersistBackendConfigMetadata(pluginConfig, upserted)) {
+        await savePluginConfig(runtime, configWithBackend);
+      }
 
-    const scope = await client.resolveScope({ ...ownership, configId: upserted.configId });
-    const currentJob = await client.getCurrentJob({ ...ownership, scopeKey: scope.scopeKey });
-    if (currentJob && !COMPLETE_JOB_STATUSES.has(currentJob.status)) {
-      const latestSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, undefined, true);
-      if (latestSnapshot) {
+      const scope = await client.resolveScope({ ...ownership, configId: upserted.configId });
+      const currentJob = await client.getCurrentJob({ ...ownership, scopeKey: scope.scopeKey });
+      if (currentJob && !COMPLETE_JOB_STATUSES.has(currentJob.status)) {
+        const latestSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, undefined, true);
+        if (latestSnapshot) {
+          return {
+            configWithBackend,
+            activeJob: currentJob,
+            currentScopeKey: currentJob.scopeKey,
+            currentResultId: latestSnapshot.resultId,
+            analysis: latestSnapshot.analysis,
+          };
+        }
         return {
           configWithBackend,
           activeJob: currentJob,
           currentScopeKey: currentJob.scopeKey,
-          currentResultId: latestSnapshot.resultId,
-          analysis: latestSnapshot.analysis,
+          currentResultId: null,
+          analysis: null,
         };
       }
-      return {
-        configWithBackend,
-        activeJob: currentJob,
-        currentScopeKey: currentJob.scopeKey,
-        currentResultId: null,
-        analysis: null,
-      };
-    }
-    if (currentJob?.status === 'success') {
-      if (!currentJob.resultId) {
-        throw new BackendAnalysisError('validate_response', '后端成功任务缺少 resultId');
+      if (currentJob?.status === 'success') {
+        if (!currentJob.resultId) {
+          throw new BackendAnalysisError('validate_response', '后端成功任务缺少 resultId');
+        }
+        const currentSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
+        return {
+          configWithBackend,
+          activeJob: null,
+          currentScopeKey: currentJob.scopeKey,
+          currentResultId: currentJob.resultId,
+          analysis: currentSnapshot?.analysis ?? null,
+        };
       }
-      const currentSnapshot = await fetchLatestBackendResult(client, ownership, currentJob.scopeKey, currentJob.resultId);
+      if (currentJob?.status === 'failed' || currentJob?.status === 'canceled') {
+        throw new BackendAnalysisError(
+          currentJob.errorStage ?? currentJob.stage ?? 'load_config',
+          currentJob.errorMessage ?? (currentJob.status === 'canceled' ? '后端分析任务已取消' : '后端分析任务失败'),
+        );
+      }
+
+      const latestSnapshot = await fetchLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
       return {
         configWithBackend,
         activeJob: null,
-        currentScopeKey: currentJob.scopeKey,
-        currentResultId: currentJob.resultId,
-        analysis: currentSnapshot?.analysis ?? null,
+        currentScopeKey: scope.scopeKey,
+        currentResultId: latestSnapshot?.resultId ?? null,
+        analysis: latestSnapshot?.analysis ?? null,
       };
-    }
-    if (currentJob?.status === 'failed' || currentJob?.status === 'canceled') {
-      throw new BackendAnalysisError(
-        currentJob.errorStage ?? currentJob.stage ?? 'load_config',
-        currentJob.errorMessage ?? (currentJob.status === 'canceled' ? '后端分析任务已取消' : '后端分析任务失败'),
-      );
-    }
-
-    const latestSnapshot = await fetchLatestBackendResult(client, ownership, scope.scopeKey, undefined, true);
-    return {
-      configWithBackend,
-      activeJob: null,
-      currentScopeKey: scope.scopeKey,
-      currentResultId: latestSnapshot?.resultId ?? null,
-      analysis: latestSnapshot?.analysis ?? null,
-    };
+    });
   }
 
   async function continueRestoredBackendJob(pluginConfig: PluginConfig, initialJob: BackendAnalysisJob, initRequestId: number) {
@@ -610,30 +623,32 @@ export default function App() {
     );
 
     try {
-      const configToSave = { ...config, filters };
-      await savePluginConfig(runtime, configToSave);
-      const ownership = await getBackendOwnership(runtime);
-      const client = createBackendAnalysisClient({ endpointUrl: configToSave.backend.endpointUrl });
-      const upserted = await upsertBackendAnalysisConfig(client, ownership, configToSave);
-      const configWithBackend = withBackendConfigId(configToSave, upserted);
-      configRef.current = configWithBackend;
-      setConfig(configWithBackend);
-      await savePluginConfig(runtime, configWithBackend);
+      await withSuppressedConfigReloads(async () => {
+        const configToSave = { ...config, filters };
+        await savePluginConfig(runtime, configToSave);
+        const ownership = await getBackendOwnership(runtime);
+        const client = createBackendAnalysisClient({ endpointUrl: configToSave.backend.endpointUrl });
+        const upserted = await upsertBackendAnalysisConfig(client, ownership, configToSave);
+        const configWithBackend = withBackendConfigId(configToSave, upserted);
+        configRef.current = configWithBackend;
+        setConfig(configWithBackend);
+        await savePluginConfig(runtime, configWithBackend);
 
-      const createdJob = await client.createAnalysisJob({
-        ...ownership,
-        configId: upserted.configId,
-        forceRefresh: true,
+        const createdJob = await client.createAnalysisJob({
+          ...ownership,
+          configId: upserted.configId,
+          forceRefresh: true,
+        });
+        const completedJob = await waitForBackendJob(client, ownership, createdJob, () => mountedRef.current);
+        if (completedJob.status !== 'success' || !completedJob.resultId) {
+          throw new BackendAnalysisError(
+            completedJob.errorStage ?? completedJob.stage ?? 'load_config',
+            completedJob.errorMessage ?? '后端分析任务未成功完成',
+          );
+        }
+        await loadLatestBackendResult(client, ownership, completedJob.scopeKey, completedJob.resultId);
+        Toast.success('后端 AI 聚合分析已更新');
       });
-      const completedJob = await waitForBackendJob(client, ownership, createdJob, () => mountedRef.current);
-      if (completedJob.status !== 'success' || !completedJob.resultId) {
-        throw new BackendAnalysisError(
-          completedJob.errorStage ?? completedJob.stage ?? 'load_config',
-          completedJob.errorMessage ?? '后端分析任务未成功完成',
-        );
-      }
-      await loadLatestBackendResult(client, ownership, completedJob.scopeKey, completedJob.resultId);
-      Toast.success('后端 AI 聚合分析已更新');
     } catch (cause) {
       const message = formatBackendAnalysisError(cause);
       setError(message);
@@ -834,31 +849,33 @@ export default function App() {
       fields: summarizeFieldMapping(configToSave.source.fields),
     });
     try {
-      await savePluginConfig(runtime, configToSave);
-      logConfigDebug('handleSaveConfig:afterDashboardSaveBeforeBackend', {
-        state,
-        sourceRequestId,
-        config: summarizePluginConfig(configToSave),
+      await withSuppressedConfigReloads(async () => {
+        await savePluginConfig(runtime, configToSave);
+        logConfigDebug('handleSaveConfig:afterDashboardSaveBeforeBackend', {
+          state,
+          sourceRequestId,
+          config: summarizePluginConfig(configToSave),
+        });
+        const ownership = await getBackendOwnership(runtime);
+        const client = createBackendAnalysisClient({ endpointUrl: configToSave.backend.endpointUrl });
+        const upserted = await upsertBackendAnalysisConfig(client, ownership, configToSave);
+        const configWithBackend = withBackendConfigId(configToSave, upserted);
+        logConfigDebug('handleSaveConfig:afterBackendUpsert', {
+          state,
+          sourceRequestId,
+          upserted,
+          config: summarizePluginConfig(configWithBackend),
+        });
+        configRef.current = configWithBackend;
+        setConfig(configWithBackend);
+        await savePluginConfig(runtime, configWithBackend);
+        logConfigDebug('handleSaveConfig:afterBackendConfigSave', {
+          state,
+          sourceRequestId,
+          config: summarizePluginConfig(configWithBackend),
+        });
+        await loadFilterOptionRecords(configWithBackend, sourceRequestId);
       });
-      const ownership = await getBackendOwnership(runtime);
-      const client = createBackendAnalysisClient({ endpointUrl: configToSave.backend.endpointUrl });
-      const upserted = await upsertBackendAnalysisConfig(client, ownership, configToSave);
-      const configWithBackend = withBackendConfigId(configToSave, upserted);
-      logConfigDebug('handleSaveConfig:afterBackendUpsert', {
-        state,
-        sourceRequestId,
-        upserted,
-        config: summarizePluginConfig(configWithBackend),
-      });
-      configRef.current = configWithBackend;
-      setConfig(configWithBackend);
-      await savePluginConfig(runtime, configWithBackend);
-      logConfigDebug('handleSaveConfig:afterBackendConfigSave', {
-        state,
-        sourceRequestId,
-        config: summarizePluginConfig(configWithBackend),
-      });
-      await loadFilterOptionRecords(configWithBackend, sourceRequestId);
       Toast.success('配置已保存');
     } catch (cause) {
       const message = formatBackendAnalysisError(cause);
