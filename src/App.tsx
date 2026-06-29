@@ -603,13 +603,9 @@ export default function App() {
 
     setLoading(true);
     setAnalysisRunning(true);
-    setAnalysis(null);
-    setAnalysisFilters(null);
     setSelectedTopic(null);
     setEvidenceRecords([]);
     setEvidencePage(1);
-    setCurrentScopeKey(null);
-    setCurrentResultId(null);
     Toast.info('已提交后端分析任务');
     console.info(
       '__HOTEL_REVIEW_AI_FRONTEND_ANALYSIS_REQUEST__',

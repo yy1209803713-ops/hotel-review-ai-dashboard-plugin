@@ -513,7 +513,7 @@ describe('App initialization', () => {
     expect(screen.queryByLabelText('hotel-review-ai-warmup-secret')).not.toBeInTheDocument();
   });
 
-  it('keeps displayed analysis when draft filters change and clears it only after updating analysis', async () => {
+  it('keeps displayed analysis while draft filters are being updated', async () => {
     const savedConfig = {
       ...withSource({
         tableId: 'tbl1',
@@ -571,9 +571,10 @@ describe('App initialization', () => {
     fireEvent.click(screen.getAllByText('更新分析')[0]);
 
     await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('正在读取评论并进行 AI 聚合分析...')).toBeInTheDocument();
+    expect(screen.getByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).toBeInTheDocument();
     expect(screen.getAllByText('正在分析').length).toBeGreaterThan(0);
-    expect(screen.queryByText('7')).not.toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('当前结果基于上次分析条件，点击更新分析生成新结果。')).toBeInTheDocument();
     expect(runtime.saveConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         customConfig: expect.objectContaining({
@@ -820,7 +821,7 @@ describe('App initialization', () => {
     });
   });
 
-  it('keeps the loading panel visible when saveConfig emits config change during analysis update', async () => {
+  it('keeps the current result visible while an analysis update is starting', async () => {
     const savedConfig = {
       ...withSource({
         tableId: 'tbl1',
@@ -876,7 +877,8 @@ describe('App initialization', () => {
     fireEvent.click(screen.getAllByText('更新分析')[0]);
 
     await waitFor(() => expect(backendAnalysisClientMock.client.createAnalysisJob).toHaveBeenCalledTimes(1));
-    expect(screen.getByText('正在读取评论并进行 AI 聚合分析...')).toBeInTheDocument();
+    expect(screen.getByText('正在后台更新 AI 聚合分析，当前结果会保留到新结果生成完成。')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
     expect(runtime.getConfig).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('还没有分析缓存')).not.toBeInTheDocument();
     expect(screen.queryByText('尚未分析')).not.toBeInTheDocument();
