@@ -524,6 +524,46 @@ describe('runAnalysis', () => {
     });
   });
 
+  it('counts new evidence from cached topic mappings even when the cache has stale accepted quotes', async () => {
+    const mergeTopicsImpl = vi.fn();
+    const result = await runAnalysis({
+      records: makeRecordsForEvidence([
+        ['rec1', '位置很好。', 5],
+        ['rec2', '出行方便。', 5],
+      ]),
+      config: { ...config, maxBatchSize: 10, topN: 10 },
+      filters,
+      fields,
+      now: '2026-06-03T12:00:00+08:00',
+      analyzeBatchImpl: async () => ({
+        evidenceItems: [
+          evidence('rec1', '位置很好', 'positive', '位置便利'),
+          evidence('rec2', '出行方便', 'positive', '位置便利'),
+        ],
+      }),
+      cachedTopicMappings: [
+        {
+          sourceLabel: '位置便利',
+          sentiment: 'positive',
+          mergeKey: '出行位置',
+          category: '位置',
+          displayTopic: '位置方便，出行省心',
+          summary: '客人认可位置和出行便利。',
+          acceptedQuotes: ['位置很好'],
+        },
+      ],
+      mergeTopicsImpl,
+    });
+
+    expect(mergeTopicsImpl).not.toHaveBeenCalled();
+    expect(result.positiveTopics[0]).toMatchObject({
+      displayTopic: '位置方便，出行省心',
+      count: 2,
+      commentRecordIds: ['rec1', 'rec2'],
+      evidencePhrases: ['位置很好', '出行方便'],
+    });
+  });
+
   it('sends only uncached topic candidates to AI merge and reports new mappings', async () => {
     const savedMappings: TopicMergeGroup[][] = [];
     const readMappingCalls: TopicMergeCandidate[][] = [];

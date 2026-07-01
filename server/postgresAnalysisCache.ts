@@ -298,13 +298,13 @@ export function createPostgresAnalysisCacheRepository(client: PostgresQueryClien
           missReasonByKey.set(key, 'mapping_json_invalid');
           continue;
         }
+        const { acceptedQuotes: _acceptedQuotes, ...mappingWithoutHistoricalQuotes } = mapping;
         hitsByKey.set(key, {
           cacheRecordId: row.id,
           candidate,
           mapping: {
-            ...mapping,
+            ...mappingWithoutHistoricalQuotes,
             sourceLabel: candidate.sourceLabel,
-            acceptedQuotes: mapping.acceptedQuotes?.filter((quote) => candidate.quotes.includes(quote)),
           },
         });
         hitRowIds.push(row.id);

@@ -705,7 +705,6 @@ function groupsFromCachedMappings(
     const member: TopicMergeMember = {
       candidateId: candidate.id,
       sourceLabel: candidate.sourceLabel,
-      acceptedQuotes: mapping.acceptedQuotes?.filter((quote) => candidate.quotes.includes(quote)),
     };
     if (!current) {
       groups.set(groupKey, {

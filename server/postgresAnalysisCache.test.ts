@@ -186,7 +186,7 @@ describeWithDatabase('createPostgresAnalysisCacheRepository', () => {
         tableId: 'tbl-review',
         model: 'qwen-plus',
         candidates: [
-          { ...candidate, id: 'candidate-rerun' },
+          { ...candidate, id: 'candidate-rerun', count: 1, quotes: ['出行方便'] },
           {
             id: 'candidate-miss',
             sourceLabel: '服务',
@@ -205,9 +205,9 @@ describeWithDatabase('createPostgresAnalysisCacheRepository', () => {
           sourceLabel: ' 位置，便利 ',
           mergeKey: '位置优势',
           summary: '覆盖后的主题摘要。',
-          acceptedQuotes: ['位置很好'],
         },
       });
+      expect(cache.hits[0].mapping.acceptedQuotes).toBeUndefined();
       expect(cache.misses.map((candidate) => candidate.id)).toEqual(['candidate-miss']);
 
       const { rows } = await pool.query<{
