@@ -107,16 +107,16 @@
 - Git working tree
 - Miaoda app `app_178y1bawrh0`
 
-- [ ] **Step 1: 检查 diff**
+- [x] **Step 1: 检查 diff**
   - Run: `git diff --stat && git diff -- src/services/analysisPipeline.ts server/postgresAnalysisCache.ts src/services/analysisPipeline.test.ts server/postgresAnalysisCache.test.ts`
 
-- [ ] **Step 2: 提交并推送到发布分支**
+- [x] **Step 2: 提交并推送到发布分支**
   - Run: `git status --short`
   - Run: `git add ...`
   - Run: `git commit -m "fix: keep cached topic mappings from filtering new evidence"`
   - Run: `git push`
 
-- [ ] **Step 3: 创建 release 并轮询完成**
+- [x] **Step 3: 创建 release 并轮询完成**
   - Run: `lark-cli apps +release-create --app-id app_178y1bawrh0`
   - Run: `lark-cli apps +release-get --app-id app_178y1bawrh0 --release-id <release_id>`
   - Expected: `status=finished`。
@@ -127,12 +127,12 @@
 - Online app database
 - Warmup endpoint
 
-- [ ] **Step 1: 按天请求 warmup**
+- [x] **Step 1: 按天请求 warmup**
   - Dates: `2026-06-01` through `2026-06-10`
   - Endpoint: `POST https://z11gk8nt38x.aiforce.cloud/app/app_178y1bawrh0/public-api/hotel-review-ai/warmup`
   - Payload: 每次 `startDate` 和 `endDate` 都等于当天。
 
-- [ ] **Step 2: 查库等待每个 warmup job 结束**
+- [x] **Step 2: 查库等待每个 warmup job 结束**
   - Run: `lark-cli apps +db-execute --app-id app_178y1bawrh0 --env online --sql "<warmup_jobs select>" --yes`
   - Expected: 每个日期 `status=success`，失败同日只重试一次。
 
@@ -141,13 +141,13 @@
 **Files:**
 - Online app API and database
 
-- [ ] **Step 1: 发起 6.1-6.10 分析**
+- [x] **Step 1: 发起 6.1-6.10 分析**
   - 用线上 `/configs/upsert`、`/scopes/resolve`、`/analysis-jobs` 走真实后端分析流程。
 
-- [ ] **Step 2: 等待 analysis job 成功**
+- [x] **Step 2: 等待 analysis job 成功**
   - 查 `analysis_jobs`，等待 `status=success`。
 
-- [ ] **Step 3: 验证主题覆盖**
+- [x] **Step 3: 验证主题覆盖**
   - 读取 latest result。
   - 检查 `overview.positiveReviews` 与 Top 主题覆盖不再出现几十条级别的断崖。
   - 检查主题下钻 `analysis_topic_evidence` 行数和主题 count 对齐。
@@ -157,17 +157,17 @@
 **Files:**
 - Online app API and database
 
-- [ ] **Step 1: 按天请求 warmup**
+- [x] **Step 1: 按天请求 warmup**
   - Dates: `2026-06-10` through `2026-07-01`
   - 每天单独请求，单日失败重试一次。
 
-- [ ] **Step 2: 等待 warmup jobs 完成**
+- [x] **Step 2: 等待 warmup jobs 完成**
   - 查 `warmup_jobs`，确认 `status=success` 或记录失败日期。
 
-- [ ] **Step 3: 发起 6.1-7.1 最终分析**
+- [x] **Step 3: 发起 6.1-7.1 最终分析**
   - 复现用户截图口径。
 
-- [ ] **Step 4: 验证最终结果**
+- [x] **Step 4: 验证最终结果**
   - 检查总评论接近 3000。
   - 检查 Top 主题数量恢复到合理量级。
   - 检查主题下钻证据数量与主题 count 一致。
@@ -183,7 +183,12 @@
 - [x] 构建通过：`tsc && vite build` completed。
 - [x] 本地 TDD 修复完成。
 - [x] 本地测试和 build 完成。
-- [ ] 飞书全栈应用发布完成。
-- [ ] 6.1-6.10 线上验证通过。
-- [ ] 6.10-7.1 warmup 完成。
-- [ ] 6.1-7.1 最终复现通过。
+- [x] 提交并推送：`9f0fd76 fix: keep cached topic mappings from filtering new evidence`，已推到 `codex/backend-owned-analysis-ingestion-spec` 和 `sprint/default`。
+- [x] 妙搭实际发布仓库修复完成：`/Users/yxk/Documents/Codex/2026-06-03/spec-users-yxk-documents-codex-2026-2/work/hotel-review-ai-miaoda-fullstack` 提交 `8ff0c1f fix: keep cached topic mappings from filtering new evidence`，已推到妙搭 `sprint/default`。
+- [x] 妙搭仓库验证通过：focused Jest 4 passed；完整 Jest 11 suites / 30 tests passed；`npm run build` passed。
+- [x] 飞书全栈应用发布完成：release `7657406698252946610` finished，线上 commit `8ff0c1f582fac0a20e9cb6407d1af963238efcec`。
+- [x] 6.1-6.10 warmup 完成：10 个单日 job 全部 `success`，总扫描 `910` 条；无重试。
+- [x] 6.1-6.10 分析通过：result `c41d66c1-1fb9-432c-a2ec-16c23853c9ac`，`totalReviews=910`，`positiveReviews=787`，好评 Top1 `224` 条；证据下钻 API 对 `出行位置` 返回 `total=224`。
+- [x] 6.1-6.10 线上验证通过。
+- [x] 6.10-7.1 warmup 完成：22 个单日 job 全部 `success`；6.30 补建 `62` 条 evidence cache miss 和 `36` 个 topic mapping miss。
+- [x] 6.1-7.1 最终复现通过：result `063073ed-227b-4c6d-937b-25d012379bc0`，`totalReviews=3010`，`positiveReviews=2610`，好评 Top1 `出行位置=741`；证据下钻 API 对 `出行位置` 返回 `total=741`。
